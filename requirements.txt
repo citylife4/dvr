@@ -1,3 +1,8 @@
-# No external dependencies needed — stdlib only.
-# The hieasy_dvr package uses only Python standard library modules:
-# socket, struct, threading, re, time, os, sys, subprocess, ctypes, logging, argparse, signal
+# Core — no external dependencies (stdlib only)
+# The hieasy_dvr package uses only Python standard library modules.
+
+# Optional — Google Drive upload for recordings
+# Install these only if you want automatic upload to Google Drive:
+#   pip3 install google-api-python-client google-auth
+# google-api-python-client
+# google-auth

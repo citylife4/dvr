@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DVR — Recordings</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: #111;
+    color: #ccc;
+    font-family: system-ui, -apple-system, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── Navigation ──────────────────────────── */
+  nav {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 8px 16px;
+    background: #1a1a1a;
+    border-bottom: 1px solid #333;
+    flex-shrink: 0;
+  }
+  nav h1 { font-size: 16px; font-weight: 600; color: #eee; }
+  nav a {
+    color: #888;
+    text-decoration: none;
+    font-size: 14px;
+    padding: 4px 12px;
+    border-radius: 4px;
+    transition: all 0.2s;
+  }
+  nav a:hover { color: #ccc; background: #2a2a2a; }
+  nav a.active { color: #fff; background: #2a6a2a; }
+  nav .spacer { flex: 1; }
+
+  /* ── Controls ────────────────────────────── */
+  .ctrl-bar {
+    display: flex;
+    gap: 12px;
+    padding: 12px 16px;
+    background: #161616;
+    border-bottom: 1px solid #282828;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .ctrl-bar .label { font-size: 13px; color: #888; }
+  .ctrl-btn {
+    border: 1px solid #444;
+    color: #ccc;
+    padding: 5px 16px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: all 0.2s;
+  }
+  .ctrl-btn.start { background: #1a3a1a; border-color: #2a6a2a; }
+  .ctrl-btn.start:hover { background: #2a5a2a; color: #fff; }
+  .ctrl-btn.stop { background: #3a1a1a; border-color: #6a2a2a; }
+  .ctrl-btn.stop:hover { background: #5a2a2a; color: #fff; }
+  .ctrl-btn:disabled { opacity: .4; cursor: not-allowed; }
+  .status-badge {
+    font-size: 12px;
+    padding: 3px 10px;
+    border-radius: 10px;
+    font-weight: 600;
+  }
+  .status-badge.running { background: #1a3a1a; color: #2ecc40; border: 1px solid #2a6a2a; }
+  .status-badge.stopped { background: #2a2a2a; color: #888; border: 1px solid #444; }
+  .status-badge.disabled { background: #2a2a2a; color: #666; border: 1px solid #333; }
+
+  /* ── Content ─────────────────────────────── */
+  .content {
+    flex: 1;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    max-width: 1000px;
+    width: 100%;
+    margin: 0 auto;
+  }
+  .section { background: #1a1a1a; border-radius: 8px; border: 1px solid #282828; }
+  .section-head {
+    padding: 12px 16px;
+    font-size: 14px;
+    font-weight: 600;
+    color: #eee;
+    border-bottom: 1px solid #282828;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  /* ── Channel cards ───────────────────────── */
+  .ch-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 12px;
+    padding: 14px;
+  }
+  .ch-card {
+    background: #222;
+    border-radius: 6px;
+    border: 1px solid #333;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .ch-card .ch-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: #eee;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .ch-card .ch-name .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+  .dot.rec { background: #e74c3c; animation: blink 1s infinite; }
+  .dot.wait { background: #f39c12; }
+  .dot.off { background: #555; }
+  .dot.err { background: #e74c3c; }
+  @keyframes blink { 50% { opacity: .3; } }
+  .ch-card .ch-detail { font-size: 11px; color: #888; }
+
+  /* ── Upload status ───────────────────────── */
+  .upload-row {
+    padding: 14px;
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+    font-size: 13px;
+  }
+  .upload-row .item { display: flex; gap: 6px; align-items: center; }
+  .upload-row .val { color: #eee; }
+  .upload-row .lbl { color: #888; }
+
+  /* ── Recordings table ────────────────────── */
+  .rec-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  .rec-table th {
+    text-align: left;
+    padding: 8px 12px;
+    color: #888;
+    font-weight: 500;
+    border-bottom: 1px solid #333;
+    font-size: 12px;
+  }
+  .rec-table td {
+    padding: 6px 12px;
+    border-bottom: 1px solid #222;
+    color: #ccc;
+  }
+  .rec-table tr:hover td { background: #1e1e1e; }
+  .rec-table .size { color: #888; }
+  .rec-table .uploaded-tag {
+    font-size: 10px;
+    background: #1a3a1a;
+    color: #2ecc40;
+    padding: 1px 6px;
+    border-radius: 3px;
+    margin-left: 6px;
+  }
+  .rec-table .empty-msg {
+    padding: 24px;
+    text-align: center;
+    color: #666;
+    font-style: italic;
+  }
+
+  /* ── Config summary ──────────────────────── */
+  .config-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 8px;
+    padding: 14px;
+    font-size: 13px;
+  }
+  .config-grid .item {
+    display: flex;
+    justify-content: space-between;
+    padding: 4px 0;
+  }
+  .config-grid .lbl { color: #888; }
+  .config-grid .val { color: #eee; }
+
+  /* ── Info box ────────────────────────────── */
+  .info-box {
+    margin: 14px;
+    padding: 12px 16px;
+    background: #1a2a3a;
+    border: 1px solid #2a4a6a;
+    border-radius: 6px;
+    font-size: 12px;
+    color: #8ab;
+    line-height: 1.5;
+  }
+  .info-box code { background: #0a1a2a; padding: 1px 5px; border-radius: 3px; color: #acd; }
+</style>
+</head>
+<body>
+
+<nav>
+  <h1>📹 DVR Dashboard</h1>
+  <a href="/">Live View</a>
+  <a href="/settings">Settings</a>
+  <a href="/recordings" class="active">Recordings</a>
+  <span class="spacer"></span>
+</nav>
+
+<!-- Control bar -->
+<div class="ctrl-bar">
+  <span class="label">Recording:</span>
+  <span class="status-badge disabled" id="badge">—</span>
+  <span class="spacer" style="flex:1"></span>
+  <button class="ctrl-btn start" id="btn-start" onclick="startRec()" disabled>▶ Start</button>
+  <button class="ctrl-btn stop" id="btn-stop" onclick="stopRec()" disabled>■ Stop</button>
+</div>
+
+<div class="content">
+
+  <!-- Channel status -->
+  <div class="section">
+    <div class="section-head">📺 Channel Status</div>
+    <div class="ch-grid" id="ch-grid">
+      <div class="ch-card"><div class="ch-detail">Loading…</div></div>
+    </div>
+  </div>
+
+  <!-- Upload status -->
+  <div class="section" id="upload-section">
+    <div class="section-head">☁️ Upload Status</div>
+    <div class="upload-row" id="upload-row">
+      <div class="item"><span class="lbl">Status:</span> <span class="val" id="upl-status">—</span></div>
+      <div class="item"><span class="lbl">Pending:</span> <span class="val" id="upl-pending">0</span></div>
+    </div>
+  </div>
+
+  <!-- Recent recordings -->
+  <div class="section">
+    <div class="section-head">📁 Recent Recordings</div>
+    <table class="rec-table">
+      <thead>
+        <tr><th>Channel</th><th>File</th><th>Size</th><th>Date</th><th></th></tr>
+      </thead>
+      <tbody id="rec-body">
+        <tr><td colspan="5" class="empty-msg">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Configuration -->
+  <div class="section">
+    <div class="section-head">⚙️ Configuration</div>
+    <div class="config-grid" id="config-grid">
+      <div class="item"><span class="lbl">Loading…</span></div>
+    </div>
+    <div class="info-box" id="setup-info" style="display:none">
+      <strong>Google Drive Setup:</strong><br>
+      1. Create a Google Cloud project and enable the Drive API<br>
+      2. Create a Service Account and download the JSON key<br>
+      3. Share your Drive folder with the service account email<br>
+      4. Set in <code>dvr.env</code>:
+         <code>DVR_GDRIVE_ENABLED=true</code>,
+         <code>DVR_GDRIVE_CREDENTIALS=/opt/dvr/gdrive-credentials.json</code>,
+         <code>DVR_GDRIVE_FOLDER_ID=your-folder-id</code>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const API = '';  // same origin
+let refreshTimer;
+
+async function fetchJSON(url) {
+  const r = await fetch(API + url);
+  return r.json();
+}
+
+async function refresh() {
+  try {
+    const [status, recs] = await Promise.all([
+      fetchJSON('/api/recordings/status'),
+      fetchJSON('/api/recordings'),
+    ]);
+    renderStatus(status);
+    renderRecordings(recs);
+    renderConfig(status);
+  } catch (e) {
+    console.error('Refresh error:', e);
+  }
+}
+
+function renderStatus(s) {
+  // Badge
+  const badge = document.getElementById('badge');
+  const btnStart = document.getElementById('btn-start');
+  const btnStop = document.getElementById('btn-stop');
+
+  if (!s.enabled) {
+    badge.className = 'status-badge disabled';
+    badge.textContent = 'Disabled';
+    btnStart.disabled = true;
+    btnStop.disabled = true;
+  } else if (s.running) {
+    badge.className = 'status-badge running';
+    badge.textContent = 'Recording';
+    btnStart.disabled = true;
+    btnStop.disabled = false;
+  } else {
+    badge.className = 'status-badge stopped';
+    badge.textContent = 'Stopped';
+    btnStart.disabled = false;
+    btnStop.disabled = true;
+  }
+
+  // Channel cards
+  const grid = document.getElementById('ch-grid');
+  const channels = s.channels || {};
+  if (Object.keys(channels).length === 0) {
+    grid.innerHTML = '<div class="ch-card"><div class="ch-detail">No channels configured</div></div>';
+    return;
+  }
+  grid.innerHTML = '';
+  for (const [ch, info] of Object.entries(channels)) {
+    const state = info.state || 'unknown';
+    let dotClass = 'off';
+    if (state === 'recording') dotClass = 'rec';
+    else if (state.startsWith('waiting')) dotClass = 'wait';
+    else if (state === 'error') dotClass = 'err';
+
+    const card = document.createElement('div');
+    card.className = 'ch-card';
+    card.innerHTML = `
+      <div class="ch-name"><span class="dot ${dotClass}"></span> CH ${ch}</div>
+      <div class="ch-detail">State: ${state}</div>
+      ${info.file ? `<div class="ch-detail">File: ${info.file}</div>` : ''}
+      <div class="ch-detail">Segments: ${info.segments || 0}</div>
+    `;
+    grid.appendChild(card);
+  }
+
+  // Upload
+  const uplStatus = document.getElementById('upl-status');
+  const uplPending = document.getElementById('upl-pending');
+  if (s.gdrive_enabled || s.upload_command) {
+    document.getElementById('upload-section').style.display = '';
+    uplStatus.textContent = s.gdrive_connected ? '● Connected' : (s.upload_command ? '● Custom command' : '○ Not connected');
+    uplStatus.style.color = (s.gdrive_connected || s.upload_command) ? '#2ecc40' : '#e74c3c';
+    uplPending.textContent = s.upload_pending || '0';
+  } else {
+    document.getElementById('upload-section').style.display = 'none';
+  }
+}
+
+function renderRecordings(recs) {
+  const tbody = document.getElementById('rec-body');
+  if (!recs || recs.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="5" class="empty-msg">No recordings yet</td></tr>';
+    return;
+  }
+  tbody.innerHTML = '';
+  for (const r of recs) {
+    const tr = document.createElement('tr');
+    const date = new Date(r.modified * 1000);
+    const sizeStr = formatSize(r.size);
+    const uploadTag = r.uploaded ? '<span class="uploaded-tag">uploaded</span>' : '';
+    tr.innerHTML = `
+      <td>${r.channel}</td>
+      <td>${r.filename}${uploadTag}</td>
+      <td class="size">${sizeStr}</td>
+      <td class="size">${date.toLocaleString()}</td>
+      <td><a href="/api/recordings/download/${r.channel}/${r.filename}" style="color:#4a9eff;text-decoration:none" title="Download">⬇</a></td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+
+function renderConfig(s) {
+  const grid = document.getElementById('config-grid');
+  grid.innerHTML = `
+    <div class="item"><span class="lbl">Enabled</span><span class="val">${s.enabled ? 'Yes' : 'No'}</span></div>
+    <div class="item"><span class="lbl">Channels</span><span class="val">${Object.keys(s.channels || {}).join(', ') || '—'}</span></div>
+    <div class="item"><span class="lbl">Segment</span><span class="val">${s.segment_minutes} min</span></div>
+    <div class="item"><span class="lbl">Stream</span><span class="val">${s.stream_type === 0 ? 'Main (HD)' : 'Sub (SD)'}</span></div>
+    <div class="item"><span class="lbl">Schedule</span><span class="val">${formatSchedule(s.schedule)}</span></div>
+    <div class="item"><span class="lbl">Retention</span><span class="val">${s.retention_hours ? s.retention_hours + 'h' : 'Forever'}</span></div>
+    <div class="item"><span class="lbl">Google Drive</span><span class="val">${s.gdrive_enabled ? (s.gdrive_connected ? '● On' : '○ Error') : 'Off'}</span></div>
+    <div class="item"><span class="lbl">Custom Upload</span><span class="val">${s.upload_command ? 'Configured' : 'Off'}</span></div>
+    <div class="item"><span class="lbl">Storage</span><span class="val">${s.record_dir || '—'}</span></div>
+  `;
+  // Show setup info if gdrive not connected
+  document.getElementById('setup-info').style.display =
+    (s.gdrive_enabled && !s.gdrive_connected) ? '' : 'none';
+}
+
+function formatSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+  if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB';
+  return (bytes / 1073741824).toFixed(2) + ' GB';
+}
+
+function formatSchedule(hours) {
+  if (!hours || hours.length === 0) return 'None';
+  if (hours.length === 24) return '0–23 (always)';
+  const sorted = [...hours].sort((a, b) => a - b);
+  // Group consecutive
+  const ranges = [];
+  let start = sorted[0], end = sorted[0];
+  for (let i = 1; i < sorted.length; i++) {
+    if (sorted[i] === end + 1) { end = sorted[i]; }
+    else { ranges.push(start === end ? `${start}` : `${start}–${end}`); start = end = sorted[i]; }
+  }
+  ranges.push(start === end ? `${start}` : `${start}–${end}`);
+  return ranges.join(', ');
+}
+
+async function startRec() {
+  try {
+    await fetch('/api/recordings/start', { method: 'POST' });
+    setTimeout(refresh, 1000);
+  } catch (e) { alert('Failed to start: ' + e); }
+}
+
+async function stopRec() {
+  try {
+    await fetch('/api/recordings/stop', { method: 'POST' });
+    setTimeout(refresh, 1000);
+  } catch (e) { alert('Failed to stop: ' + e); }
+}
+
+// Initial load + auto-refresh every 10s
+refresh();
+refreshTimer = setInterval(refresh, 10000);
+</script>
+</body>
+</html>

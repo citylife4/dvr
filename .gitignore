@@ -8,6 +8,7 @@ venv/
 *.json
 .env
 cache/
+recordings/
 
 # Windows tooling (not needed — pure Python auth)
 dvr_tools_windows

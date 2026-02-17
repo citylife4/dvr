@@ -48,7 +48,7 @@ sudo apt-get update -qq && sudo apt-get install -y -qq \
 
 echo ""
 echo "--- Step 2: Create deploy directory ---"
-sudo mkdir -p $DEPLOY_DIR/hieasy_dvr $DEPLOY_DIR/web $DEPLOY_DIR/cache
+sudo mkdir -p $DEPLOY_DIR/hieasy_dvr $DEPLOY_DIR/web $DEPLOY_DIR/cache $DEPLOY_DIR/recordings
 sudo chown -R $(whoami):$(whoami) $DEPLOY_DIR
 
 echo ""
@@ -77,6 +77,20 @@ DVR_MEDIA_PORT=6050
 DVR_USERNAME=admin
 DVR_PASSWORD=123456
 DVR_WEB_PORT=8080
+
+# Recording (set DVR_RECORD_ENABLED=true to enable)
+DVR_RECORD_ENABLED=false
+DVR_RECORD_CHANNELS=0
+DVR_RECORD_SEGMENT_MIN=15
+DVR_RECORD_DIR=$DEPLOY_DIR/recordings
+DVR_RECORD_RETENTION_HR=24
+DVR_RECORD_SCHEDULE=0-23
+
+# Google Drive upload (optional — see hieasy_dvr/gdrive.py for setup)
+DVR_GDRIVE_ENABLED=false
+DVR_GDRIVE_CREDENTIALS=$DEPLOY_DIR/gdrive-credentials.json
+DVR_GDRIVE_FOLDER_ID=
+DVR_GDRIVE_DELETE_LOCAL=false
 ENVEOF
 
 echo ""

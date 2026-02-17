@@ -6,10 +6,16 @@ Optionally manages mediamtx as a child process for a single-service deployment.
 Endpoints:
   /                      → Live view (4-channel WebRTC grid)
   /settings              → Configuration dashboard
+  /recordings            → Recording status & file list
   /api/config            → JSON: all config types from DVR
   /api/config/<main_cmd> → JSON: specific config type
   /api/status            → JSON: DVR status summary
   /api/config-types      → JSON: available config type list (no DVR needed)
+  /api/recordings        → JSON: list of local recording files
+  /api/recordings/status → JSON: recorder + upload status
+  /api/recordings/start  → POST: start recording
+  /api/recordings/stop   → POST: stop recording
+  /api/recordings/download/<ch>/<file> → Download a recording
   /<static files>        → Files from web/ directory
 
 Port: $DVR_WEB_PORT (default 8080)
@@ -23,16 +29,25 @@ import signal
 import http.server
 import threading
 import subprocess
-import traceback
+import logging
+import mimetypes
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(name)s] %(message)s',
+)
+
 from hieasy_dvr.config import DVRConfigClient, CONFIG_TYPES
+from hieasy_dvr.recorder import RecordingScheduler
 
 PORT = int(os.environ.get('DVR_WEB_PORT', 8080))
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 WEB_DIR = os.path.join(BASE_DIR, 'web')
 CACHE_DIR = os.path.join(BASE_DIR, 'cache')
+
+_recorder = RecordingScheduler()
 
 # ── Disk-backed config cache ──────────────────────────
 
@@ -202,6 +217,14 @@ class DVRHandler(http.server.SimpleHTTPRequestHandler):
             ])
         elif path == '/settings' or path == '/settings/':
             self._serve_file('settings.html')
+        elif path == '/recordings' or path == '/recordings/':
+            self._serve_file('recordings.html')
+        elif path == '/api/recordings':
+            self._json_response(_recorder.get_recordings())
+        elif path == '/api/recordings/status':
+            self._json_response(_recorder.get_status())
+        elif path.startswith('/api/recordings/download/'):
+            self._serve_recording(path)
         elif path == '/favicon.ico':
             # Return empty 204 to avoid 404 noise in logs
             self.send_response(204)
@@ -229,6 +252,49 @@ class DVRHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header('Content-Length', str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _serve_recording(self, path):
+        """Serve a recording file for download."""
+        # path = /api/recordings/download/ch0/filename.mp4
+        parts = path.split('/')
+        if len(parts) < 6:
+            self.send_error(400)
+            return
+        ch = parts[4]   # e.g. 'ch0'
+        fname = parts[5]
+        # Security: reject path traversal
+        if '..' in ch or '..' in fname or '/' in fname:
+            self.send_error(403)
+            return
+        filepath = os.path.join(_recorder.record_dir, ch, fname)
+        if not os.path.isfile(filepath):
+            self.send_error(404)
+            return
+        fsize = os.path.getsize(filepath)
+        mime = mimetypes.guess_type(filepath)[0] or 'application/octet-stream'
+        self.send_response(200)
+        self.send_header('Content-Type', mime)
+        self.send_header('Content-Length', str(fsize))
+        self.send_header('Content-Disposition', f'attachment; filename="{fname}"')
+        self.end_headers()
+        with open(filepath, 'rb') as f:
+            while True:
+                chunk = f.read(65536)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+
+    def do_POST(self):
+        path = self.path.split('?')[0]
+        if path == '/api/recordings/start':
+            _recorder.enabled = True
+            _recorder.start()
+            self._json_response({'ok': True, 'status': 'started'})
+        elif path == '/api/recordings/stop':
+            _recorder.stop()
+            self._json_response({'ok': True, 'status': 'stopped'})
+        else:
+            self.send_error(404)
 
 
 # ── mediamtx subprocess management ────────────────────
@@ -273,8 +339,10 @@ def _stop_mediamtx():
 
 def main():
     _start_mediamtx()
+    _recorder.start()
 
     def _shutdown(signum, frame):
+        _recorder.stop()
         _stop_mediamtx()
         sys.exit(0)
 
@@ -284,11 +352,13 @@ def main():
         print(f'[dvr] Dashboard: http://0.0.0.0:{PORT}/')
         print(f'[dvr]   Live:     http://0.0.0.0:{PORT}/')
         print(f'[dvr]   Settings: http://0.0.0.0:{PORT}/settings')
+        print(f'[dvr]   Record:   http://0.0.0.0:{PORT}/recordings')
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:
             pass
         finally:
+            _recorder.stop()
             _stop_mediamtx()
             print('\n[dvr] Stopped.')
 
