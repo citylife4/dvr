@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DVR — Settings</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: #111;
+    color: #ccc;
+    font-family: system-ui, -apple-system, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── Navigation ──────────────────────────── */
+  nav {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 8px 16px;
+    background: #1a1a1a;
+    border-bottom: 1px solid #333;
+    flex-shrink: 0;
+  }
+  nav h1 { font-size: 16px; font-weight: 600; color: #eee; }
+  nav a {
+    color: #888;
+    text-decoration: none;
+    font-size: 14px;
+    padding: 4px 12px;
+    border-radius: 4px;
+    transition: all 0.2s;
+  }
+  nav a:hover { color: #ccc; background: #2a2a2a; }
+  nav a.active { color: #fff; background: #2a6a2a; }
+  nav .spacer { flex: 1; }
+  nav .status-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #555;
+    transition: background 0.3s;
+  }
+  nav .status-dot.online { background: #2ecc40; }
+  nav .status-dot.error { background: #e74c3c; }
+  nav .status-text { font-size: 12px; color: #666; }
+  .refresh-btn {
+    background: #2a2a2a;
+    border: 1px solid #444;
+    color: #ccc;
+    padding: 3px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: all 0.2s;
+  }
+  .refresh-btn:hover { background: #3a3a3a; color: #fff; }
+  .refresh-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* ── Status Bar ──────────────────────────── */
+  .status-bar {
+    display: flex;
+    gap: 24px;
+    padding: 10px 16px;
+    background: #161616;
+    border-bottom: 1px solid #282828;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .status-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+  }
+  .status-item .label { color: #666; }
+  .status-item .value { color: #ddd; font-weight: 500; }
+
+  /* ── Progress Bar ────────────────────────── */
+  .progress-bar {
+    height: 2px;
+    background: #222;
+    position: relative;
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+  .progress-bar .fill {
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    background: #2ecc40;
+    transition: width 0.3s ease;
+    width: 0%;
+  }
+  .progress-bar.hidden { opacity: 0; }
+
+  /* ── Main Content ────────────────────────── */
+  .content {
+    flex: 1;
+    padding: 16px;
+    overflow-y: auto;
+    max-width: 1400px;
+    margin: 0 auto;
+    width: 100%;
+  }
+
+  .error-banner {
+    background: #3a1a1a;
+    border: 1px solid #5a2a2a;
+    color: #e77;
+    padding: 12px 16px;
+    border-radius: 6px;
+    margin-bottom: 16px;
+    font-size: 14px;
+  }
+
+  /* ── Config Cards ────────────────────────── */
+  .config-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+    gap: 12px;
+  }
+
+  .config-card {
+    background: #1a1a1a;
+    border: 1px solid #2a2a2a;
+    border-radius: 8px;
+    overflow: hidden;
+    transition: border-color 0.2s, opacity 0.3s;
+  }
+  .config-card:hover { border-color: #3a3a3a; }
+  .config-card.loading { opacity: 0.6; }
+  .config-card.loaded { opacity: 1; }
+  .config-card.error { border-color: #4a2a2a; }
+
+  .card-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    background: #1e1e1e;
+    border-bottom: 1px solid #2a2a2a;
+    cursor: pointer;
+    user-select: none;
+  }
+  .card-header:hover { background: #242424; }
+
+  .card-icon { font-size: 18px; flex-shrink: 0; }
+  .card-title { font-size: 14px; font-weight: 600; color: #eee; }
+  .card-desc { font-size: 11px; color: #666; margin-top: 1px; }
+  .card-status {
+    font-size: 11px;
+    color: #555;
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+  .card-status.ok { color: #585; }
+  .card-status.err { color: #855; }
+  .card-arrow {
+    font-size: 12px;
+    color: #555;
+    transition: transform 0.2s;
+    flex-shrink: 0;
+  }
+  .config-card.open .card-arrow { transform: rotate(90deg); }
+
+  .card-body {
+    display: none;
+    padding: 0;
+    max-height: 500px;
+    overflow-y: auto;
+  }
+  .config-card.open .card-body { display: block; }
+
+  .card-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    color: #555;
+    font-size: 13px;
+    gap: 8px;
+  }
+  .spinner {
+    width: 14px; height: 14px;
+    border: 2px solid #333;
+    border-top-color: #888;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── Config Table ────────────────────────── */
+  .cfg-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  .cfg-table tr { border-bottom: 1px solid #222; }
+  .cfg-table tr:last-child { border-bottom: none; }
+  .cfg-table tr:hover { background: #1e1e1e; }
+  .cfg-table td {
+    padding: 6px 14px;
+    vertical-align: top;
+  }
+  .cfg-table .key {
+    color: #888;
+    font-weight: 500;
+    white-space: nowrap;
+    width: 40%;
+  }
+  .cfg-table .val {
+    color: #ddd;
+    word-break: break-all;
+  }
+  .cfg-table .val.empty { color: #555; font-style: italic; }
+
+  /* Nested sections */
+  .cfg-section {
+    border-top: 1px solid #282828;
+  }
+  .cfg-section-header {
+    padding: 8px 14px;
+    font-size: 12px;
+    font-weight: 700;
+    color: #7ab;
+    background: #181c1e;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .cfg-section-header:hover { background: #1c2022; }
+  .cfg-section-header::before {
+    content: '▸';
+    font-size: 10px;
+    transition: transform 0.2s;
+    color: #556;
+  }
+  .cfg-section.open .cfg-section-header::before { transform: rotate(90deg); }
+  .cfg-section-body { display: none; }
+  .cfg-section.open .cfg-section-body { display: block; }
+
+  /* Tags for special values */
+  .tag {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: 500;
+  }
+  .tag-on { background: #1a3a1a; color: #5c5; }
+  .tag-off { background: #2a1a1a; color: #a66; }
+  .tag-num { color: #7af; }
+
+  /* ── Scrollbar ───────────────────────────── */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: #444; }
+
+  /* ── Responsive ──────────────────────────── */
+  @media (max-width: 600px) {
+    .config-grid { grid-template-columns: 1fr; }
+    .status-bar { gap: 12px; padding: 8px 12px; }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <h1>📹 DVR Dashboard</h1>
+  <a href="/">Live View</a>
+  <a href="/settings" class="active">Settings</a>
+  <span class="spacer"></span>
+  <button class="refresh-btn" id="refresh-btn" title="Reload all configs from DVR">↻ Refresh</button>
+  <span class="status-dot" id="dot"></span>
+  <span class="status-text" id="status-text">Connecting…</span>
+</nav>
+
+<div class="status-bar" id="status-bar">
+  <div class="status-item"><span class="label">Model:</span> <span class="value" id="st-model">—</span></div>
+  <div class="status-item"><span class="label">Firmware:</span> <span class="value" id="st-fw">—</span></div>
+  <div class="status-item"><span class="label">Channels:</span> <span class="value" id="st-ch">—</span></div>
+  <div class="status-item"><span class="label">DVR Time:</span> <span class="value" id="st-time">—</span></div>
+  <div class="status-item"><span class="label">Disk:</span> <span class="value" id="st-disk">—</span></div>
+</div>
+
+<div class="progress-bar hidden" id="progress-bar"><div class="fill" id="progress-fill"></div></div>
+
+<div class="content" id="content">
+  <div class="config-grid" id="config-grid"></div>
+</div>
+
+<script>
+(function () {
+  const API = '';  // same origin
+
+  // ── Status Bar ─────────────────────────────
+  async function loadStatus() {
+    try {
+      const r = await fetch(API + '/api/status');
+      const s = await r.json();
+      if (s.error && !s.connected) throw new Error(s.error);
+
+      document.getElementById('dot').className = 'status-dot online';
+      document.getElementById('status-text').textContent = 'Connected';
+
+      const info = s.device_info?.DeviceInfo || {};
+      document.getElementById('st-model').textContent = info.TypeName || info.DevType || '—';
+      document.getElementById('st-fw').textContent = info.SoftwareVersion || '—';
+      document.getElementById('st-ch').textContent = info.VideoInChannels || '—';
+
+      const t = s.system_time?.SySTime || {};
+      if (t.Year) {
+        document.getElementById('st-time').textContent =
+          `${t.Year}-${p(t.Month)}-${p(t.Day)} ${p(t.Hour)}:${p(t.Minute)}:${p(t.Second)}`;
+      }
+
+      const stor = s.storage?.StorageCfg?._children?.DiskArray;
+      if (stor) {
+        const disks = Array.isArray(stor) ? stor : [stor];
+        const diskList = disks[0]?._children?.Disk;
+        if (diskList) {
+          const items = Array.isArray(diskList) ? diskList : [diskList];
+          let totalGB = 0, freeGB = 0;
+          items.forEach(d => {
+            totalGB += parseInt(d.TotalSpace || 0) / 1024;
+            freeGB += parseInt(d.FreeSpace || 0) / 1024;
+          });
+          const usedPct = totalGB > 0 ? ((1 - freeGB / totalGB) * 100).toFixed(0) : 0;
+          document.getElementById('st-disk').textContent =
+            `${freeGB.toFixed(1)} GB free / ${totalGB.toFixed(1)} GB (${usedPct}% used)`;
+        }
+      }
+    } catch (e) {
+      document.getElementById('dot').className = 'status-dot error';
+      document.getElementById('status-text').textContent = 'Offline';
+      console.warn('Status error:', e);
+    }
+  }
+
+  function p(n) { return String(n).padStart(2, '0'); }
+
+  // ── Rendering helpers ──────────────────────
+
+  function esc(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  function formatValue(key, val) {
+    if (val === '1' || val === '0') {
+      if (/enable|active|status|switch|on|support/i.test(key)) {
+        return val === '1'
+          ? '<span class="tag tag-on">Enabled</span>'
+          : '<span class="tag tag-off">Disabled</span>';
+      }
+    }
+    if (val === '') return '<span class="val empty">(empty)</span>';
+    if (typeof val === 'string' && val.length > 80) {
+      return `<span title="${esc(val)}">${esc(val.slice(0, 80))}…</span>`;
+    }
+    if (/^\d+$/.test(val) && val.length < 10) {
+      return `<span class="tag-num">${esc(val)}</span>`;
+    }
+    return esc(val);
+  }
+
+  const KEY_LABELS = {
+    'VideoInChannels': 'Video Inputs', 'AudioInChannels': 'Audio Inputs',
+    'AlarmInChannels': 'Alarm Inputs', 'AlarmOutChannels': 'Alarm Outputs',
+    'SoftwareVersion': 'Firmware', 'TypeName': 'Model', 'DevType': 'Device Type',
+    'BoardType': 'Board', 'DvrID': 'DVR ID', 'TimeZone': 'Time Zone',
+    'MenuLanguage': 'Language', 'DateFormat': 'Date Format', 'TimeFormat': 'Time Format',
+    'AutoLockScreenTime': 'Auto-Lock (sec)', 'IPAddress': 'IP Address',
+    'SubMask': 'Subnet Mask', 'GateWay': 'Gateway', 'FirstDNS': 'Primary DNS',
+    'MacAddress': 'MAC Address', 'HttpPort': 'HTTP Port', 'CmdPort': 'Command Port',
+    'MediaPort': 'Media Port', 'MobilePort': 'Mobile Port', 'NATEnable': 'NAT',
+    'DdnsEnable': 'DDNS', 'DHCPEnable': 'DHCP', 'TotalSpace': 'Total (MB)',
+    'FreeSpace': 'Free (MB)', 'DiskState': 'Disk State', 'DiskType': 'Disk Type',
+    'MainStream': 'Main Stream', 'SubStream': 'Sub-Stream', 'Resolution': 'Resolution',
+    'BitRate': 'Bitrate', 'FrameRate': 'Frame Rate', 'Quality': 'Quality',
+    'UserName': 'Username', 'PassWord': 'Password', 'UserType': 'User Type',
+    'RemoteRightArray': 'Remote Rights', 'NTPEnable': 'NTP',
+    'NTPServer': 'NTP Server', 'NTPPort': 'NTP Port', 'NTPInterval': 'NTP Interval',
+    'EMLEnable': 'Email', 'DSTEnable': 'DST', 'DeviceName': 'Device Name',
+    'OverWrite': 'Overwrite', 'RecordLen': 'Record Length',
+    'PreRecord': 'Pre-Record', 'RecordMode': 'Record Mode',
+  };
+
+  function prettyKey(k) {
+    return KEY_LABELS[k] || k.replace(/([A-Z])/g, ' $1').replace(/^./, s => s.toUpperCase()).trim();
+  }
+
+  function renderObj(obj, depth) {
+    if (!obj || typeof obj !== 'object') return '';
+    depth = depth || 0;
+    let html = '';
+
+    // Flat attributes
+    const attrs = Object.entries(obj).filter(([k]) => !k.startsWith('_'));
+    if (attrs.length > 0) {
+      html += '<table class="cfg-table">';
+      for (const [k, v] of attrs) {
+        if (typeof v === 'object') continue;
+        html += `<tr><td class="key">${esc(prettyKey(k))}</td><td class="val">${formatValue(k, v)}</td></tr>`;
+      }
+      html += '</table>';
+    }
+
+    // Nested children
+    const children = obj._children;
+    if (children) {
+      for (const [tag, child] of Object.entries(children)) {
+        const items = Array.isArray(child) ? child : [child];
+        items.forEach((item, idx) => {
+          const title = items.length > 1 ? `${tag} [${idx}]` : tag;
+          html += `<div class="cfg-section">`;
+          html += `<div class="cfg-section-header" onclick="this.parentElement.classList.toggle('open')">${esc(title)}</div>`;
+          html += `<div class="cfg-section-body">${renderObj(item, depth + 1)}</div>`;
+          html += `</div>`;
+        });
+      }
+    }
+
+    return html || '<table class="cfg-table"><tr><td class="val empty">(no data)</td></tr></table>';
+  }
+
+  // ── Card management ────────────────────────
+
+  function createCard(mc, name, icon, desc) {
+    return `<div class="config-card loading" id="card-${mc}" data-mc="${mc}">
+      <div class="card-header" onclick="this.parentElement.classList.toggle('open')">
+        <span class="card-icon">${icon}</span>
+        <div><span class="card-title">${esc(name)}</span>
+        <div class="card-desc">${esc(desc)}</div></div>
+        <span class="card-status" id="card-status-${mc}"></span>
+        <span class="card-arrow">▸</span>
+      </div>
+      <div class="card-body" id="card-body-${mc}">
+        <div class="card-loading"><div class="spinner"></div> Loading…</div>
+      </div>
+    </div>`;
+  }
+
+  function populateCard(mc, cfg) {
+    const card = document.getElementById('card-' + mc);
+    const body = document.getElementById('card-body-' + mc);
+    const status = document.getElementById('card-status-' + mc);
+    if (!card || !body) return;
+
+    card.classList.remove('loading');
+
+    if (cfg.error) {
+      card.classList.add('error');
+      status.className = 'card-status err';
+      status.textContent = 'error';
+      body.innerHTML = `<div style="padding:12px 14px;color:#a66;font-size:13px">${esc(cfg.error)}</div>`;
+      return;
+    }
+
+    card.classList.add('loaded');
+    status.className = 'card-status ok';
+    const dataKeys = cfg.data ? Object.keys(cfg.data).length : 0;
+    status.textContent = dataKeys > 0 ? `${dataKeys} section${dataKeys > 1 ? 's' : ''}` : '';
+
+    if (cfg.data && Object.keys(cfg.data).length > 0) {
+      let html = '';
+      for (const [tag, val] of Object.entries(cfg.data)) {
+        html += `<div class="cfg-section open">`;
+        html += `<div class="cfg-section-header" onclick="this.parentElement.classList.toggle('open')">${esc(tag)}</div>`;
+        html += `<div class="cfg-section-body">${renderObj(val)}</div>`;
+        html += `</div>`;
+      }
+      body.innerHTML = html;
+    } else {
+      body.innerHTML = '<table class="cfg-table"><tr><td class="val empty">(no data)</td></tr></table>';
+    }
+  }
+
+  // ── Progressive loading ────────────────────
+
+  let configTypes = [];
+  let isLoading = false;
+
+  async function init() {
+    try {
+      const r = await fetch(API + '/api/config-types');
+      configTypes = await r.json();
+    } catch (e) {
+      document.getElementById('content').innerHTML =
+        `<div class="error-banner">Failed to load config types: ${esc(e.message)}</div>`;
+      return;
+    }
+
+    // Render skeleton cards immediately
+    const grid = document.getElementById('config-grid');
+    grid.innerHTML = configTypes.map(ct =>
+      createCard(ct.main_cmd, ct.name, ct.icon, ct.description)
+    ).join('');
+
+    // Load status + configs
+    loadStatus();
+    loadAllConfigs();
+  }
+
+  async function loadAllConfigs() {
+    if (isLoading) return;
+    isLoading = true;
+
+    const btn = document.getElementById('refresh-btn');
+    const bar = document.getElementById('progress-bar');
+    const fill = document.getElementById('progress-fill');
+
+    btn.disabled = true;
+    bar.classList.remove('hidden');
+    fill.style.width = '0%';
+
+    const total = configTypes.length;
+    let done = 0;
+
+    for (const ct of configTypes) {
+      try {
+        const r = await fetch(API + '/api/config/' + ct.main_cmd);
+        const cfg = await r.json();
+        populateCard(ct.main_cmd, cfg);
+      } catch (e) {
+        populateCard(ct.main_cmd, { error: e.message });
+      }
+      done++;
+      fill.style.width = (done / total * 100).toFixed(0) + '%';
+    }
+
+    setTimeout(() => { bar.classList.add('hidden'); }, 600);
+    btn.disabled = false;
+    isLoading = false;
+  }
+
+  async function refresh() {
+    if (isLoading) return;
+
+    for (const ct of configTypes) {
+      const card = document.getElementById('card-' + ct.main_cmd);
+      const body = document.getElementById('card-body-' + ct.main_cmd);
+      const status = document.getElementById('card-status-' + ct.main_cmd);
+      if (card) { card.classList.remove('loaded', 'error', 'open'); card.classList.add('loading'); }
+      if (body) body.innerHTML = '<div class="card-loading"><div class="spinner"></div> Loading…</div>';
+      if (status) { status.className = 'card-status'; status.textContent = ''; }
+    }
+
+    loadStatus();
+    loadAllConfigs();
+  }
+
+  // ── Init ───────────────────────────────────
+  document.getElementById('refresh-btn').addEventListener('click', refresh);
+  init();
+  setInterval(loadStatus, 30000);
+
+})();
+</script>
+</body>
+</html>

@@ -19,3 +19,18 @@ sdk_extract/
 
 # Test/analysis artifacts
 feeder_test.*
+
+# Analysis/RE scripts (historical — not needed for production)
+crack_hash*.py
+disasm_*.py
+dvr_connect.py
+hieasy_client.py
+mitm_proxy.py
+parse_traffic.py
+probe_web_interface.py
+test_config_commands.py
+download_web_interface.py
+dvr_web_interface.html
+hvrocx_extracted/
+tools/
+docs/
