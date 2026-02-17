@@ -1,113 +1,151 @@
 # HiEasy DVR RTSP Bridge
 
-Connects to SVL-AHDSET04 (and similar HiEasy Technology DVRs) and re-publishes
-the camera streams as standard RTSP using [mediamtx](https://github.com/bluenviron/mediamtx).
+Connects to HiEasy Technology DVRs (SVL-AHDSET04 and similar) via their
+proprietary TCP protocol and re-publishes camera streams as **standard RTSP**.
+Includes a **web viewer** for all 4 channels in a browser.
 
-Designed to run on a **Raspberry Pi** on the same LAN as the DVR.
+No Windows DLLs, no Wine — pure Python authentication.
 
 ## Architecture
 
 ```
-DVR (192.168.1.174)          Raspberry Pi                    Clients
-┌─────────────┐       ┌──────────────────────┐       ┌─────────────────┐
-│  Port 5050  │◄─────►│  dvr_feeder.py       │       │  VLC / ffplay   │
-│  (Command)  │       │       │ stdout        │       │  or any RTSP    │
-│             │       │       ▼               │       │  player         │
-│  Port 6050  │◄─────►│  ffmpeg ─► mediamtx  │◄─────►│                 │
-│  (Media)    │       │        RTSP :8554     │       │ rtsp://pi:8554/ │
-└─────────────┘       └──────────────────────┘       └─────────────────┘
+DVR                      Raspberry Pi (or any Linux)              Clients
+┌────────────┐     ┌─────────────────────────────────┐     ┌──────────────┐
+│ Port 5050  │◄───►│  dvr_feeder.py → ffmpeg          │     │ VLC / ffplay │
+│ (command)  │     │                  ↓               │     │ Web browser  │
+│ Port 6050  │◄───►│              mediamtx            │◄───►│ Home Assist. │
+│ (media)    │     │   RTSP :8554  HLS :8888  WR :8889│     │ etc.         │
+└────────────┘     │   Web viewer :8080               │     └──────────────┘
+                   └─────────────────────────────────┘
 ```
 
-## Quick Deploy
+## Quick Start
 
 ```bash
-./deploy.sh pi@<raspberry-pi-ip>
+# 1. Clone
+git clone <this-repo> && cd dvr
+
+# 2. Configure — set your DVR's IP address
+cp .env.example .env
+nano .env           # change DVR_HOST to your DVR's IP
+
+# 3. Test a single channel
+DVR_HOST=192.168.1.x python3 dvr_feeder.py -c 0 -v 2>/dev/null | \
+  ffmpeg -fflags +genpts -r 25 -f h264 -i pipe:0 -c copy -t 5 test.mp4
+
+# 4. Deploy as a service (on Pi or any Linux)
+./deploy.sh user@hostname [dvr-ip]
 ```
 
-This will:
-1. Install system dependencies (Python 3, ffmpeg, Wine + QEMU)
-2. Download mediamtx (auto-detects ARM architecture)
-3. Copy all application files
-4. Copy SDK DLL files (for hash oracle authentication)
-5. Install and enable the systemd service
+## Deploy to Raspberry Pi
 
-## Manual Usage
-
-**Stream one channel to file:**
 ```bash
-python3 dvr_feeder.py --channel 0 | ffmpeg -f h264 -i pipe:0 -c copy out.mp4
+./deploy.sh pi@192.168.1.177 192.168.1.174
 ```
 
-**Stream to RTSP (requires mediamtx running):**
-```bash
-python3 dvr_feeder.py --channel 0 | \
-  ffmpeg -f h264 -i pipe:0 -c copy -f rtsp rtsp://localhost:8554/ch0
-```
+This will install Python 3, ffmpeg, mediamtx, copy all files, write the
+environment config, and enable two systemd services:
 
-**Stream all channels:**
-```bash
-python3 dvr_rtsp_bridge.py
-```
-
-## RTSP Streams
-
-Once running, streams are available at:
-- `rtsp://<pi-ip>:8554/ch0` — Channel 0
-- `rtsp://<pi-ip>:8554/ch1` — Channel 1
-- `rtsp://<pi-ip>:8554/ch2` — Channel 2
-- `rtsp://<pi-ip>:8554/ch3` — Channel 3
+| Service | Port | Purpose |
+|---|---|---|
+| `dvr-rtsp` | 8554 (RTSP), 8888 (HLS), 8889 (WebRTC) | mediamtx + DVR bridge |
+| `dvr-web` | 8080 | 4-channel web viewer |
 
 Streams start **on-demand** — the DVR connection is only made when a client connects.
 
+```bash
+# Start / stop
+sudo systemctl start dvr-rtsp dvr-web
+sudo systemctl stop dvr-rtsp dvr-web
+
+# Logs
+sudo journalctl -u dvr-rtsp -f
+```
+
+## Accessing Streams
+
+**RTSP** (VLC, ffplay, Home Assistant, Blue Iris, etc.):
+```
+rtsp://<host>:8554/ch0
+rtsp://<host>:8554/ch1
+rtsp://<host>:8554/ch2
+rtsp://<host>:8554/ch3
+```
+
+**Web viewer** (all 4 channels in a 2×2 grid):
+```
+http://<host>:8080/
+```
+
+**HLS** (for embedding in web pages):
+```
+http://<host>:8888/ch0/
+```
+
 ## Configuration
 
-Environment variables (also set in the systemd service):
+All settings are in `/opt/dvr/dvr.env` (or `.env` locally):
 
 | Variable | Default | Description |
 |---|---|---|
-| `DVR_HOST` | `192.168.1.174` | DVR IP address |
+| `DVR_HOST` | *(required)* | DVR IP address |
 | `DVR_CMD_PORT` | `5050` | Command port |
 | `DVR_MEDIA_PORT` | `6050` | Media port |
 | `DVR_USERNAME` | `admin` | Username |
 | `DVR_PASSWORD` | `123456` | Password |
-| `HIEASY_SDK_DIR` | `/opt/dvr/sdk` | SDK DLL directory (for hash oracle) |
+| `DVR_WEB_PORT` | `8080` | Web viewer port |
 
-## Authentication
-
-The DVR uses a proprietary hash algorithm (not MD5) implemented in `HieClientUnit.dll`.
-Since the algorithm hasn't been reverse-engineered, authentication uses a "hash oracle"
-that runs the DLL via:
-- **WSL2 interop** (when running on WSL)
-- **Wine + QEMU** (when running on ARM Linux / Raspberry Pi)
+To change the DVR IP after deployment:
+```bash
+sudo nano /opt/dvr/dvr.env
+sudo systemctl restart dvr-rtsp dvr-web
+```
 
 ## Project Structure
 
 ```
-hieasy_dvr/             Python package
+hieasy_dvr/             Python package — DVR protocol + auth
 ├── __init__.py
 ├── protocol.py         Wire protocol (36-byte headers, XML commands)
-├── auth.py             Hash oracle authentication
+├── auth.py             Pure Python DES authentication
 ├── client.py           DVRClient class
-├── stream.py           H.264 frame parser
-└── _wine_oracle.py     Wine/WSL helper for hash computation
+├── stream.py           H.264 frame extraction
+└── _wine_oracle.py     Legacy Wine/DLL fallback (unused)
 
-dvr_feeder.py           Single-channel H.264 feeder (stdout)
-dvr_rtsp_bridge.py      Multi-channel RTSP bridge
+dvr_feeder.py           Single-channel H.264 feeder (stdout pipe)
+dvr_rtsp_bridge.py      Multi-channel always-on bridge
+dvr_web.py              Web viewer HTTP server
+web/index.html          4-channel grid viewer (WebRTC)
 mediamtx.yml            mediamtx RTSP server config
-dvr-rtsp.service        systemd service unit
-deploy.sh               One-command Pi deployment script
+dvr-rtsp.service        systemd service (mediamtx)
+dvr-web.service         systemd service (web viewer)
+deploy.sh               One-command deployment
+.env.example            Configuration template
 ```
 
 ## Requirements
 
-- Python 3.8+
+- Python 3.8+ (stdlib only — no pip packages needed)
 - ffmpeg
-- mediamtx (downloaded by deploy.sh)
-- Wine + QEMU-user-static (for ARM — installed by deploy.sh)
+- mediamtx (downloaded automatically by `deploy.sh`)
 
 ## Video Specs
 
-- Codec: H.264 Baseline
-- Resolution: 1920×1080
-- Frame rate: 25 fps
-- Color: YUV420P
+| Property | Value |
+|---|---|
+| Codec | H.264 Baseline |
+| Resolution | 1920×1080 |
+| Frame rate | 25 fps |
+| Color | YUV420P, progressive |
+
+## How Authentication Works
+
+The DVR uses challenge-response with a **modified DES** cipher. The three
+non-standard modifications vs. standard DES are:
+
+1. **LSB-first bit ordering** (standard DES is MSB-first)
+2. **LSB-first S-box output** extraction
+3. **No L/R swap before Final Permutation** (FP applied to L‖R, not R‖L)
+
+All permutation tables, S-boxes, and the key schedule are standard DES.
+See `AGENTS.md` for the full reverse-engineering story.

@@ -29,7 +29,7 @@ class DVRClient:
 
     Usage::
 
-        dvr = DVRClient('192.168.1.174')
+        dvr = DVRClient('192.168.1.x')
         dvr.connect(channel=0)
 
         for codec, h264_data in dvr.stream():

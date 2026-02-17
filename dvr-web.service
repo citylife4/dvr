@@ -12,7 +12,7 @@ ExecStart=/usr/bin/python3 /opt/dvr/dvr_web.py
 Restart=always
 RestartSec=3
 
-Environment=DVR_WEB_PORT=8080
+EnvironmentFile=/opt/dvr/dvr.env
 
 StandardOutput=journal
 StandardError=journal

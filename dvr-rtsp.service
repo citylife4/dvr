@@ -12,12 +12,8 @@ ExecStart=/opt/dvr/mediamtx /opt/dvr/mediamtx.yml
 Restart=always
 RestartSec=5
 
-# Environment for DVR feeder scripts
-Environment=DVR_HOST=192.168.1.174
-Environment=DVR_CMD_PORT=5050
-Environment=DVR_MEDIA_PORT=6050
-Environment=DVR_USERNAME=admin
-Environment=DVR_PASSWORD=123456
+# DVR connection settings — edit /opt/dvr/dvr.env to match your DVR
+EnvironmentFile=/opt/dvr/dvr.env
 
 # Logging
 StandardOutput=journal

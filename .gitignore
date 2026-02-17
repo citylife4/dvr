@@ -6,19 +6,16 @@ venv/
 *.h264
 *.log
 *.json
+.env
 
-# Symlink to Windows tools (not needed on Pi)
+# Windows tooling (not needed — pure Python auth)
 dvr_tools_windows
+*.exe
+*.dll
 
-# Old analysis/RE scripts (not needed for deployment)
-crack_hash.py
-crack_hash2.py
-disasm_deep.py
-disasm_funcs.py
-dvr_connect.py
-hieasy_client.py
-mitm_proxy.py
-parse_traffic.py
+# Extracted binaries
+hvrocx_extract/
+sdk_extract/
 
-# Test artifacts
+# Test/analysis artifacts
 feeder_test.*

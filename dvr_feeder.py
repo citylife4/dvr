@@ -4,17 +4,17 @@ DVR Feeder — connects to the HiEasy DVR and outputs raw H.264 to stdout.
 
 Designed to be piped to ffmpeg for RTSP publishing to mediamtx:
 
-  python3 dvr_feeder.py --channel 0 | \
-    ffmpeg -f h264 -i pipe:0 -c copy -f rtsp rtsp://localhost:8554/ch0
+  DVR_HOST=192.168.1.x python3 dvr_feeder.py --channel 0 | \
+    ffmpeg -fflags +genpts -r 25 -f h264 -i pipe:0 -c copy -f rtsp rtsp://localhost:8554/ch0
 
 Or used with mediamtx's runOnDemand to start on first viewer connect.
 
-Environment variables:
-  DVR_HOST      DVR IP address (default: 192.168.1.174)
-  DVR_CMD_PORT  Command port (default: 5050)
-  DVR_MEDIA_PORT Media port (default: 6050)
-  DVR_USERNAME  Username (default: admin)
-  DVR_PASSWORD  Password (default: 123456)
+Environment variables (all overridable via CLI flags):
+  DVR_HOST        DVR IP address (required — no default)
+  DVR_CMD_PORT    Command port  (default: 5050)
+  DVR_MEDIA_PORT  Media port    (default: 6050)
+  DVR_USERNAME    Username      (default: admin)
+  DVR_PASSWORD    Password      (default: 123456)
 """
 import sys
 import os
@@ -36,7 +36,8 @@ def main():
                         help='Camera channel (0-3, default: 0)')
     parser.add_argument('-s', '--stream-type', type=int, default=1,
                         help='Stream type (1=main, 2=sub, default: 1)')
-    parser.add_argument('--host', default=os.environ.get('DVR_HOST', '192.168.1.174'))
+    parser.add_argument('--host', default=os.environ.get('DVR_HOST'),
+                        help='DVR IP address (or set DVR_HOST env var)')
     parser.add_argument('--cmd-port', type=int,
                         default=int(os.environ.get('DVR_CMD_PORT', '5050')))
     parser.add_argument('--media-port', type=int,
@@ -45,6 +46,9 @@ def main():
     parser.add_argument('--password', default=os.environ.get('DVR_PASSWORD', '123456'))
     parser.add_argument('-v', '--verbose', action='store_true')
     args = parser.parse_args()
+
+    if not args.host:
+        parser.error('DVR host is required: use --host or set DVR_HOST env var')
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
