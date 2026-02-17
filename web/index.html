@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DVR — Live View</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: #111;
+    color: #ccc;
+    font-family: system-ui, -apple-system, sans-serif;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 16px;
+    background: #1a1a1a;
+    border-bottom: 1px solid #333;
+    flex-shrink: 0;
+  }
+
+  header h1 {
+    font-size: 16px;
+    font-weight: 600;
+    color: #eee;
+  }
+
+  header .controls {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+
+  header .controls button {
+    background: #2a2a2a;
+    border: 1px solid #444;
+    color: #ccc;
+    padding: 4px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+
+  header .controls button:hover { background: #3a3a3a; }
+  header .controls button.active { background: #1a6b1a; border-color: #2a8a2a; color: #fff; }
+
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr 1fr;
+    gap: 2px;
+    flex: 1;
+    padding: 2px;
+    min-height: 0;
+  }
+
+  .grid.single {
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr;
+  }
+
+  .channel {
+    position: relative;
+    background: #000;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 2px;
+  }
+
+  .channel video {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: #000;
+  }
+
+  .channel .overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 10px;
+    background: linear-gradient(to bottom, rgba(0,0,0,0.7), transparent);
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  .channel .label {
+    font-size: 13px;
+    font-weight: 600;
+    color: #fff;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+  }
+
+  .channel .status {
+    font-size: 11px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-weight: 500;
+  }
+
+  .status.live { background: #c0392b; color: #fff; }
+  .status.connecting { background: #e67e22; color: #fff; }
+  .status.error { background: #555; color: #ccc; }
+
+  .channel .message {
+    position: absolute;
+    color: #666;
+    font-size: 14px;
+    text-align: center;
+  }
+
+  .channel.focused {
+    grid-column: 1 / -1;
+    grid-row: 1 / -1;
+  }
+
+  .grid.single .channel:not(.focused) { display: none; }
+
+  .channel { cursor: pointer; }
+
+  /* Fullscreen tweaks */
+  :fullscreen body, :-webkit-full-screen body { height: 100vh; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🔴 DVR Live View</h1>
+  <div class="controls">
+    <button id="btn-layout" title="Toggle single/grid view">Grid 2×2</button>
+    <button id="btn-fullscreen" title="Fullscreen">⛶</button>
+  </div>
+</header>
+
+<div class="grid" id="grid">
+  <div class="channel" data-ch="0">
+    <div class="overlay">
+      <span class="label">CH 0</span>
+      <span class="status connecting">…</span>
+    </div>
+    <div class="message">Connecting…</div>
+    <video muted autoplay playsinline></video>
+  </div>
+  <div class="channel" data-ch="1">
+    <div class="overlay">
+      <span class="label">CH 1</span>
+      <span class="status connecting">…</span>
+    </div>
+    <div class="message">Connecting…</div>
+    <video muted autoplay playsinline></video>
+  </div>
+  <div class="channel" data-ch="2">
+    <div class="overlay">
+      <span class="label">CH 2</span>
+      <span class="status connecting">…</span>
+    </div>
+    <div class="message">Connecting…</div>
+    <video muted autoplay playsinline></video>
+  </div>
+  <div class="channel" data-ch="3">
+    <div class="overlay">
+      <span class="label">CH 3</span>
+      <span class="status connecting">…</span>
+    </div>
+    <div class="message">Connecting…</div>
+    <video muted autoplay playsinline></video>
+  </div>
+</div>
+
+<script>
+(function () {
+  // Auto-detect server host from the page URL
+  const HOST = location.hostname || 'localhost';
+  const HLS_PORT = 8888;
+  const WHEP_PORT = 8889;
+  const CHANNELS = [0, 1, 2, 3];
+  const RETRY_DELAY = 3000;
+
+  // ── Channel state ──────────────────────────────────
+  const channels = {};
+
+  CHANNELS.forEach(ch => {
+    const el = document.querySelector(`.channel[data-ch="${ch}"]`);
+    channels[ch] = {
+      el,
+      video: el.querySelector('video'),
+      status: el.querySelector('.status'),
+      message: el.querySelector('.message'),
+      pc: null,
+      retryTimer: null,
+    };
+  });
+
+  function setStatus(ch, state, text) {
+    const c = channels[ch];
+    c.status.className = 'status ' + state;
+    c.status.textContent = text || state;
+    c.message.textContent = state === 'live' ? '' :
+                            state === 'connecting' ? 'Connecting…' :
+                            text || 'Offline';
+  }
+
+  // ── WebRTC via WHEP ────────────────────────────────
+  async function connectWHEP(ch) {
+    const c = channels[ch];
+    cleanup(ch);
+    setStatus(ch, 'connecting', 'connecting');
+
+    try {
+      const pc = new RTCPeerConnection({ iceServers: [] });
+      c.pc = pc;
+
+      pc.addTransceiver('video', { direction: 'recvonly' });
+      pc.addTransceiver('audio', { direction: 'recvonly' });
+
+      pc.ontrack = (ev) => {
+        if (ev.streams && ev.streams[0]) {
+          c.video.srcObject = ev.streams[0];
+        }
+      };
+
+      pc.onconnectionstatechange = () => {
+        if (pc.connectionState === 'connected') {
+          setStatus(ch, 'live', 'LIVE');
+        } else if (['failed', 'disconnected', 'closed'].includes(pc.connectionState)) {
+          setStatus(ch, 'error', 'disconnected');
+          scheduleRetry(ch);
+        }
+      };
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      // Wait for ICE gathering
+      await new Promise(resolve => {
+        if (pc.iceGatheringState === 'complete') return resolve();
+        pc.onicegatheringstatechange = () => {
+          if (pc.iceGatheringState === 'complete') resolve();
+        };
+        setTimeout(resolve, 2000);
+      });
+
+      const whepUrl = `http://${HOST}:${WHEP_PORT}/ch${ch}/whep`;
+      const resp = await fetch(whepUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/sdp' },
+        body: pc.localDescription.sdp,
+      });
+
+      if (!resp.ok) throw new Error(`WHEP ${resp.status}`);
+
+      const answer = await resp.text();
+      await pc.setRemoteDescription({ type: 'answer', sdp: answer });
+
+    } catch (err) {
+      console.warn(`CH${ch} WHEP failed:`, err.message);
+      setStatus(ch, 'error', 'retry…');
+      scheduleRetry(ch);
+    }
+  }
+
+  function cleanup(ch) {
+    const c = channels[ch];
+    if (c.pc) { c.pc.close(); c.pc = null; }
+    if (c.retryTimer) { clearTimeout(c.retryTimer); c.retryTimer = null; }
+    c.video.srcObject = null;
+  }
+
+  function scheduleRetry(ch) {
+    const c = channels[ch];
+    if (c.retryTimer) return;
+    c.retryTimer = setTimeout(() => {
+      c.retryTimer = null;
+      connectWHEP(ch);
+    }, RETRY_DELAY);
+  }
+
+  // ── Layout: grid vs single ─────────────────────────
+  const grid = document.getElementById('grid');
+  const btnLayout = document.getElementById('btn-layout');
+  let singleMode = false;
+  let focusedCh = null;
+
+  btnLayout.addEventListener('click', () => {
+    if (singleMode) {
+      singleMode = false;
+      grid.classList.remove('single');
+      document.querySelectorAll('.channel').forEach(el => el.classList.remove('focused'));
+      btnLayout.textContent = 'Grid 2×2';
+      focusedCh = null;
+    } else {
+      // switch to single mode showing ch0
+      enterSingle(0);
+    }
+  });
+
+  function enterSingle(ch) {
+    singleMode = true;
+    focusedCh = ch;
+    grid.classList.add('single');
+    document.querySelectorAll('.channel').forEach(el => {
+      el.classList.toggle('focused', parseInt(el.dataset.ch) === ch);
+    });
+    btnLayout.textContent = `CH ${ch} — Back to Grid`;
+  }
+
+  // Double-click a channel to go single; click again to go back
+  document.querySelectorAll('.channel').forEach(el => {
+    el.addEventListener('dblclick', () => {
+      const ch = parseInt(el.dataset.ch);
+      if (singleMode && focusedCh === ch) {
+        btnLayout.click();
+      } else {
+        enterSingle(ch);
+      }
+    });
+  });
+
+  // ── Fullscreen ─────────────────────────────────────
+  document.getElementById('btn-fullscreen').addEventListener('click', () => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+    } else {
+      document.documentElement.requestFullscreen();
+    }
+  });
+
+  // ── Start ──────────────────────────────────────────
+  CHANNELS.forEach(ch => connectWHEP(ch));
+
+})();
+</script>
+</body>
+</html>

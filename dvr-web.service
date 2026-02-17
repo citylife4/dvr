@@ -1,0 +1,26 @@
+[Unit]
+Description=DVR Web Viewer
+After=dvr-rtsp.service
+Wants=dvr-rtsp.service
+
+[Service]
+Type=simple
+User=dvr
+Group=dvr
+WorkingDirectory=/opt/dvr
+ExecStart=/usr/bin/python3 /opt/dvr/dvr_web.py
+Restart=always
+RestartSec=3
+
+Environment=DVR_WEB_PORT=8080
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dvr-web
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/dvr
+
+[Install]
+WantedBy=multi-user.target
