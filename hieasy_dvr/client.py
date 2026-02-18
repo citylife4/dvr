@@ -69,6 +69,7 @@ class DVRClient:
         # Command TCP connection
         self._cmd_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._cmd_sock.settimeout(10)
+        self._cmd_sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
         self._cmd_sock.connect((self.host, self.cmd_port))
 
         # --- Login ---
@@ -101,6 +102,7 @@ class DVRClient:
         # --- Media TCP connection ---
         self._media_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._media_sock.settimeout(10)
+        self._media_sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
         self._media_sock.connect((self.host, self.media_port))
         self._media_sock.sendall(pack_media_header(self._session))
         self._media_sock.recv(HEADER_SIZE)  # Handshake reply

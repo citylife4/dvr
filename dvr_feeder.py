@@ -21,6 +21,7 @@ import os
 import signal
 import argparse
 import logging
+import time
 
 # Add parent directory to path for the hieasy_dvr package
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -72,26 +73,43 @@ def main():
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
 
-    try:
-        dvr.connect(channel=args.channel, stream_type=args.stream_type)
-        log.info("Streaming channel %d to stdout...", args.channel)
+    MAX_RETRIES = 5
+    RETRY_BASE = 3          # seconds
+    retry_count = 0
 
-        stdout = sys.stdout.buffer
-        for _codec, h264_data in dvr.stream():
-            try:
-                stdout.write(h264_data)
-                stdout.flush()
-            except BrokenPipeError:
-                log.info("Stdout pipe broken — reader disconnected")
-                break
+    while True:
+        try:
+            dvr.connect(channel=args.channel, stream_type=args.stream_type)
+            log.info("Streaming channel %d to stdout...", args.channel)
+            retry_count = 0     # connected OK — reset backoff
 
-    except KeyboardInterrupt:
-        log.info("Interrupted")
-    except Exception as e:
-        log.error("Fatal: %s", e, exc_info=True)
-        sys.exit(1)
-    finally:
-        dvr.disconnect()
+            stdout = sys.stdout.buffer
+            for _codec, h264_data in dvr.stream():
+                try:
+                    stdout.write(h264_data)
+                    stdout.flush()
+                except BrokenPipeError:
+                    log.info("Stdout pipe broken — reader disconnected")
+                    dvr.disconnect()
+                    return
+
+            # stream() ended normally (DVR closed connection)
+            log.warning("Stream ended for channel %d", args.channel)
+
+        except KeyboardInterrupt:
+            log.info("Interrupted")
+            break
+        except Exception as e:
+            retry_count += 1
+            if retry_count > MAX_RETRIES:
+                log.error("Giving up after %d retries: %s", MAX_RETRIES, e)
+                sys.exit(1)
+            delay = min(RETRY_BASE * (2 ** (retry_count - 1)), 30)
+            log.warning("Connection error (attempt %d/%d): %s — retrying in %ds",
+                        retry_count, MAX_RETRIES, e, delay)
+            time.sleep(delay)
+        finally:
+            dvr.disconnect()
 
 
 if __name__ == '__main__':

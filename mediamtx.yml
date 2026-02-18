@@ -38,22 +38,22 @@ paths:
     runOnDemand: bash -c "python3 /opt/dvr/dvr_feeder.py --channel 0 | ffmpeg -hide_banner -loglevel warning -fflags +genpts -r 25 -f h264 -i pipe:0 -c copy -f rtsp rtsp://localhost:8554/ch0"
     runOnDemandRestart: yes
     runOnDemandStartTimeout: 30s
-    runOnDemandCloseAfter: 10s
+    runOnDemandCloseAfter: 60s
 
   ch1:
-    runOnDemand: bash -c "python3 /opt/dvr/dvr_feeder.py --channel 1 | ffmpeg -hide_banner -loglevel warning -fflags +genpts -r 25 -f h264 -i pipe:0 -c copy -f rtsp rtsp://localhost:8554/ch1"
+    runOnDemand: bash -c "sleep 2 && python3 /opt/dvr/dvr_feeder.py --channel 1 | ffmpeg -hide_banner -loglevel warning -fflags +genpts -r 25 -f h264 -i pipe:0 -c copy -f rtsp rtsp://localhost:8554/ch1"
     runOnDemandRestart: yes
     runOnDemandStartTimeout: 30s
-    runOnDemandCloseAfter: 10s
+    runOnDemandCloseAfter: 60s
 
   ch2:
-    runOnDemand: bash -c "python3 /opt/dvr/dvr_feeder.py --channel 2 | ffmpeg -hide_banner -loglevel warning -fflags +genpts -r 25 -f h264 -i pipe:0 -c copy -f rtsp rtsp://localhost:8554/ch2"
+    runOnDemand: bash -c "sleep 4 && python3 /opt/dvr/dvr_feeder.py --channel 2 | ffmpeg -hide_banner -loglevel warning -fflags +genpts -r 25 -f h264 -i pipe:0 -c copy -f rtsp rtsp://localhost:8554/ch2"
     runOnDemandRestart: yes
     runOnDemandStartTimeout: 30s
-    runOnDemandCloseAfter: 10s
+    runOnDemandCloseAfter: 60s
 
   ch3:
-    runOnDemand: bash -c "python3 /opt/dvr/dvr_feeder.py --channel 3 | ffmpeg -hide_banner -loglevel warning -fflags +genpts -r 25 -f h264 -i pipe:0 -c copy -f rtsp rtsp://localhost:8554/ch3"
+    runOnDemand: bash -c "sleep 6 && python3 /opt/dvr/dvr_feeder.py --channel 3 | ffmpeg -hide_banner -loglevel warning -fflags +genpts -r 25 -f h264 -i pipe:0 -c copy -f rtsp rtsp://localhost:8554/ch3"
     runOnDemandRestart: yes
     runOnDemandStartTimeout: 30s
-    runOnDemandCloseAfter: 10s
+    runOnDemandCloseAfter: 60s

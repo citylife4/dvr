@@ -472,23 +472,29 @@
     }
   });
 
+  // ── Staggered connect: avoid hammering DVR with all channels at once ──
+  const STAGGER_MS = 2000; // 2s between each channel connect
+
+  function staggerConnect(chList) {
+    chList.forEach((ch, i) => {
+      setTimeout(() => connectWHEP(ch), i * STAGGER_MS);
+    });
+  }
+
   // ── Visibility: pause retries when tab hidden, reconnect on show ──
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) return;
-    // Tab became visible — reconnect any non-live channels
-    CHANNELS.forEach(ch => {
-      const c = channels[ch];
-      const state = c.pc && c.pc.connectionState;
-      if (state !== 'connected' && state !== 'connecting') {
-        c.retryCount = 0; // fresh start on tab focus
-        cleanup(ch);
-        connectWHEP(ch);
-      }
+    // Tab became visible — reconnect any non-live channels (staggered)
+    const dead = CHANNELS.filter(ch => {
+      const state = channels[ch].pc && channels[ch].pc.connectionState;
+      return state !== 'connected' && state !== 'connecting';
     });
+    dead.forEach(ch => { channels[ch].retryCount = 0; cleanup(ch); });
+    staggerConnect(dead);
   });
 
   // ── Start ──────────────────────────────────────────
-  CHANNELS.forEach(ch => connectWHEP(ch));
+  staggerConnect(CHANNELS);
 
   // Start polling recording status
   setInterval(updateRecStatus, 5000);
