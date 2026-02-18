@@ -181,6 +181,17 @@
     color: #666;
     font-style: italic;
   }
+  .del-btn {
+    background: none;
+    border: none;
+    color: #e74c3c;
+    cursor: pointer;
+    font-size: 15px;
+    padding: 0 4px;
+    opacity: 0.6;
+    transition: opacity 0.15s;
+  }
+  .del-btn:hover { opacity: 1; }
 
   /* ── Config form ─────────────────────────── */
   .cfg-form {
@@ -296,7 +307,11 @@
 
   <!-- Recent recordings -->
   <div class="section">
-    <div class="section-head">📁 Recent Recordings</div>
+    <div class="section-head">
+      📁 Recent Recordings
+      <span class="spacer" style="flex:1"></span>
+      <button class="ctrl-btn stop" id="btn-delete-all" onclick="deleteAll()" style="font-size:12px;padding:3px 12px">🗑 Delete All</button>
+    </div>
     <table class="rec-table">
       <thead>
         <tr><th>Channel</th><th>File</th><th>Size</th><th>Date</th><th></th></tr>
@@ -578,7 +593,10 @@ function renderRecordings(recs) {
       <td>${r.filename}${uploadTag}</td>
       <td class="size">${sizeStr}</td>
       <td class="size">${date.toLocaleString()}</td>
-      <td><a href="/api/recordings/download/${r.channel}/${r.filename}" style="color:#4a9eff;text-decoration:none" title="Download">⬇</a></td>
+      <td style="white-space:nowrap">
+        <a href="/api/recordings/download/${r.channel}/${r.filename}" style="color:#4a9eff;text-decoration:none" title="Download">⬇</a>
+        <button class="del-btn" title="Delete" onclick="deleteRecording('${r.channel}','${r.filename}')">🗑</button>
+      </td>
     `;
     tbody.appendChild(tr);
   }
@@ -664,6 +682,38 @@ async function stopRec() {
     await fetch('/api/recordings/stop', { method: 'POST' });
     setTimeout(refresh, 1000);
   } catch (e) { alert('Failed to stop: ' + e); }
+}
+
+async function deleteRecording(channel, filename) {
+  if (!confirm(`Delete ${channel}/${filename}?`)) return;
+  try {
+    const r = await fetch(`/api/recordings/${channel}/${filename}`, { method: 'DELETE' });
+    const d = await r.json();
+    if (d.ok) {
+      refresh();
+    } else {
+      alert('Delete failed: ' + (d.error || 'Unknown error'));
+    }
+  } catch (e) { alert('Delete failed: ' + e); }
+}
+
+async function deleteAll() {
+  const tbody = document.getElementById('rec-body');
+  const count = tbody.querySelectorAll('tr:not(.empty-msg)').length;
+  if (count === 0) { alert('No recordings to delete.'); return; }
+  if (!confirm(`Delete all ${count} recording(s)? This cannot be undone.`)) return;
+  const btn = document.getElementById('btn-delete-all');
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/recordings/delete-all', { method: 'POST' });
+    const d = await r.json();
+    if (d.ok) {
+      refresh();
+    } else {
+      alert('Delete failed: ' + (d.error || 'Unknown error'));
+    }
+  } catch (e) { alert('Delete failed: ' + e); }
+  btn.disabled = false;
 }
 
 // ── Google Drive OAuth wizard ─────────────────────────────────────────────────

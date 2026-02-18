@@ -16,6 +16,8 @@ Endpoints:
   /api/recordings/config    → GET / POST: recording configuration
   /api/recordings/start     → POST: start recording
   /api/recordings/stop      → POST: stop recording
+  /api/recordings/<ch>/<f>  → DELETE: delete a single recording file
+  /api/recordings/delete-all → POST: delete all recordings
   /api/recordings/download/<ch>/<file> → Download a recording
   /api/dvr/discover         → GET: probe network for DVRs (probe=1 to force)
   /api/gdrive/status        → GET: OAuth config + connection status
@@ -474,6 +476,24 @@ class DVRHandler(http.server.SimpleHTTPRequestHandler):
                     break
                 self.wfile.write(chunk)
 
+    def do_DELETE(self):
+        path = self.path.split('?')[0]
+        # DELETE /api/recordings/<channel>/<filename>
+        if path.startswith('/api/recordings/') and path.count('/') == 4:
+            parts = path.split('/')
+            ch, fname = parts[3], parts[4]
+            try:
+                _recorder.delete_recording(ch, fname)
+                self._json_response({'ok': True})
+            except FileNotFoundError:
+                self._json_response({'error': 'File not found'}, 404)
+            except ValueError as e:
+                self._json_response({'error': str(e)}, 400)
+            except Exception as e:
+                self._json_response({'error': str(e)}, 500)
+        else:
+            self.send_error(404)
+
     def do_POST(self):
         path = self.path.split('?')[0]
         if path == '/api/recordings/start':
@@ -491,6 +511,12 @@ class DVRHandler(http.server.SimpleHTTPRequestHandler):
             try:
                 _recorder.update_config(body, persist_path=RECORDING_CONFIG_PATH)
                 self._json_response({'ok': True, 'config': _recorder.get_config()})
+            except Exception as e:
+                self._json_response({'error': str(e)}, 500)
+        elif path == '/api/recordings/delete-all':
+            try:
+                count = _recorder.delete_all_recordings()
+                self._json_response({'ok': True, 'deleted': count})
             except Exception as e:
                 self._json_response({'error': str(e)}, 500)
         elif path == '/api/dvr/discover':

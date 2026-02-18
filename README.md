@@ -143,6 +143,8 @@ sudo journalctl -u dvr -f       # follow logs
 | `/api/recordings/status` | GET | Recorder + upload status |
 | `/api/recordings/start` | POST | Start recording |
 | `/api/recordings/stop` | POST | Stop recording |
+| `/api/recordings/<ch>/<file>` | DELETE | Delete a single recording |
+| `/api/recordings/delete-all` | POST | Delete all recordings |
 
 ## Project Structure
 

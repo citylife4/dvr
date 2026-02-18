@@ -278,6 +278,33 @@ class RecordingScheduler:
         recordings.sort(key=lambda r: r['modified'], reverse=True)
         return recordings[:limit]
 
+    def delete_recording(self, channel, filename):
+        """Delete a single recording file.  Returns True on success."""
+        # Security: reject any path traversal
+        if '..' in channel or '/' in channel or '..' in filename or '/' in filename:
+            raise ValueError('Invalid channel or filename')
+        if not filename.endswith('.mp4'):
+            raise ValueError('Only .mp4 files may be deleted')
+        filepath = os.path.join(self.record_dir, channel, filename)
+        if not os.path.isfile(filepath):
+            raise FileNotFoundError(f'{channel}/{filename} not found')
+        os.remove(filepath)
+        self._uploaded.discard(filepath)
+        log.info('Deleted recording %s/%s', channel, filename)
+        return True
+
+    def delete_all_recordings(self):
+        """Delete all local recording files.  Returns count deleted."""
+        count = 0
+        recs = self.get_recordings(limit=99999)
+        for r in recs:
+            try:
+                self.delete_recording(r['channel'], r['filename'])
+                count += 1
+            except Exception as e:
+                log.warning('Could not delete %s/%s: %s', r['channel'], r['filename'], e)
+        return count
+
     # ── Recording loop ──────────────────────────────────
 
     def _record_loop(self, channel):
