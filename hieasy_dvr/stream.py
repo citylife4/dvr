@@ -10,6 +10,7 @@ The payload starts with a vendor NAL prefix (000001c7, 22 bytes)
 followed by standard H.264 NAL units with 4-byte start codes.
 """
 import struct
+import socket
 import logging
 
 from .protocol import MEDIA_MAGIC
@@ -65,12 +66,15 @@ def iter_frames(sock, timeout=5):
                 return
             buf += chunk
             consecutive_timeouts = 0
-        except Exception:
+        except socket.timeout:
             consecutive_timeouts += 1
             if consecutive_timeouts >= max_timeouts:
-                log.warning("Media socket timed out %d times", max_timeouts)
+                log.warning("Media socket timed out %d times consecutively", max_timeouts)
                 return
             continue
+        except OSError as e:
+            log.error("Media socket error: %s", e)
+            return
 
         # Parse complete frames from buffer
         while len(buf) >= 80:  # 36 header + 44 sub-header minimum

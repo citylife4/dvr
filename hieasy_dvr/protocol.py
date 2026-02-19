@@ -68,7 +68,9 @@ def make_xml(cmd_id, inner):
 def recv_msg(sock, timeout=10):
     """
     Receive one complete message from a command socket.
-    Returns (header_tuple, body_bytes) or (None, None) on error.
+    Returns (header_tuple, body_bytes) or (None, None) on clean close.
+    Raises socket.timeout if no data within `timeout`.
+    Raises OSError on connection errors.
     Header tuple is 9 big-endian uint32 fields.
     """
     sock.settimeout(timeout)

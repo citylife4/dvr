@@ -5,6 +5,7 @@ import socket
 import struct
 import threading
 import re
+import sys
 import time
 import logging
 
@@ -21,6 +22,14 @@ from .auth import compute_hash
 from .stream import iter_frames
 
 log = logging.getLogger(__name__)
+
+# Maximum age of unretrieved messages before pruning (seconds)
+_MSG_MAX_AGE = 60
+# Maximum queued messages before pruning oldest
+_MSG_MAX_COUNT = 200
+# Heartbeat miss threshold: if no heartbeat arrives within this many seconds
+# the DVR has likely dropped us.
+_HEARTBEAT_MISS_SEC = 45
 
 
 class DVRClient:
@@ -50,8 +59,12 @@ class DVRClient:
         self._media_sock = None
         self._session = None
         self._running = False
-        self._msgs = []
-        self._lock = threading.Lock()
+        self._dead = False              # set True when cmd connection is lost
+        self._msgs = []                 # (timestamp, hdr, body_str)
+        self._lock = threading.Lock()   # protects _msgs list
+        self._send_lock = threading.Lock()   # serializes writes to _cmd_sock
+        self._last_heartbeat = 0        # time.time() of last heartbeat seen
+        self._disconnect_lock = threading.Lock()  # makes disconnect() reentrant
 
     # ------------------------------------------------------------------
     # Connection lifecycle
@@ -66,10 +79,15 @@ class DVRClient:
         """
         log.info("Connecting to %s:%d ...", self.host, self.cmd_port)
 
+        # Reset state from any previous connection
+        self._dead = False
+        self._msgs = []
+        self._last_heartbeat = 0
+
         # Command TCP connection
         self._cmd_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._cmd_sock.settimeout(10)
-        self._cmd_sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        _configure_keepalive(self._cmd_sock)
         self._cmd_sock.connect((self.host, self.cmd_port))
 
         # --- Login ---
@@ -77,8 +95,9 @@ class DVRClient:
 
         # Start background threads
         self._running = True
-        threading.Thread(target=self._reader_loop, daemon=True).start()
-        threading.Thread(target=self._heartbeat_loop, daemon=True).start()
+        self._last_heartbeat = time.time()  # DVR sends first heartbeat soon
+        threading.Thread(target=self._reader_loop, daemon=True, name=f'dvr-reader').start()
+        threading.Thread(target=self._heartbeat_loop, daemon=True, name=f'dvr-heartbeat').start()
 
         # --- Create stream ---
         xml = make_xml(
@@ -87,7 +106,7 @@ class DVRClient:
                 channel, stream_type
             ),
         )
-        self._cmd_sock.sendall(pack_cmd_header(len(xml)) + xml)
+        self._send_cmd(pack_cmd_header(len(xml)) + xml)
 
         _, reply = self._wait_for('RealStreamCreateReply', timeout=5)
         if not reply:
@@ -102,7 +121,7 @@ class DVRClient:
         # --- Media TCP connection ---
         self._media_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._media_sock.settimeout(10)
-        self._media_sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        _configure_keepalive(self._media_sock)
         self._media_sock.connect((self.host, self.media_port))
         self._media_sock.sendall(pack_media_header(self._session))
         self._media_sock.recv(HEADER_SIZE)  # Handshake reply
@@ -112,75 +131,93 @@ class DVRClient:
             ID_STREAM_START,
             '<RealStreamStartRequest MediaSession="{}" />'.format(self._session),
         )
-        self._cmd_sock.sendall(pack_cmd_header(len(xml)) + xml)
+        self._send_cmd(pack_cmd_header(len(xml)) + xml)
         self._wait_for('RealStreamStartReply', timeout=3)
         log.info("Stream started on channel %d", channel)
 
     def stream(self):
         """
         Generator yielding (codec, h264_bytes) from the media connection.
-        Stops when disconnect() is called or the socket closes.
+        Stops when disconnect() is called, the socket closes, or the
+        command channel dies (heartbeat miss / reader death).
         """
         if not self._media_sock:
             raise RuntimeError("Not connected — call connect() first")
         for codec, data in iter_frames(self._media_sock):
-            if not self._running:
+            if not self._running or self._dead:
                 break
             yield codec, data
 
     def disconnect(self):
-        """Gracefully disconnect from the DVR."""
-        self._running = False
+        """Gracefully disconnect from the DVR (reentrant / thread-safe)."""
+        with self._disconnect_lock:
+            if not self._running and self._cmd_sock is None:
+                return   # already disconnected
+            self._running = False
 
-        try:
-            if self._session and self._cmd_sock:
-                # Stop stream
-                xml = make_xml(
-                    ID_STREAM_STOP,
-                    '<RealStreamStopRequest MediaSession="{}" />'.format(
-                        self._session
-                    ),
-                )
-                self._cmd_sock.sendall(pack_cmd_header(len(xml)) + xml)
-                time.sleep(0.2)
-
-                # Destroy stream
-                xml = make_xml(
-                    ID_STREAM_DESTROY,
-                    '<RealStreamDestroyRequest MediaSession="{}" />'.format(
-                        self._session
-                    ),
-                )
-                self._cmd_sock.sendall(pack_cmd_header(len(xml)) + xml)
-                time.sleep(0.2)
-
-                # Logout
-                xml = make_xml(
-                    ID_LOGOUT,
-                    '<Logout UserName="{}" />'.format(self.username),
-                )
-                self._cmd_sock.sendall(pack_cmd_header(len(xml)) + xml)
-        except Exception:
-            pass
-
-        for sock in (self._media_sock, self._cmd_sock):
             try:
-                sock.close()
+                if self._session and self._cmd_sock and not self._dead:
+                    # Stop stream
+                    xml = make_xml(
+                        ID_STREAM_STOP,
+                        '<RealStreamStopRequest MediaSession="{}" />'.format(
+                            self._session
+                        ),
+                    )
+                    self._send_cmd(pack_cmd_header(len(xml)) + xml)
+                    time.sleep(0.2)
+
+                    # Destroy stream
+                    xml = make_xml(
+                        ID_STREAM_DESTROY,
+                        '<RealStreamDestroyRequest MediaSession="{}" />'.format(
+                            self._session
+                        ),
+                    )
+                    self._send_cmd(pack_cmd_header(len(xml)) + xml)
+                    time.sleep(0.2)
+
+                    # Logout
+                    xml = make_xml(
+                        ID_LOGOUT,
+                        '<Logout UserName="{}" />'.format(self.username),
+                    )
+                    self._send_cmd(pack_cmd_header(len(xml)) + xml)
             except Exception:
                 pass
 
-        self._cmd_sock = None
-        self._media_sock = None
-        self._session = None
-        log.info("Disconnected")
+            for sock in (self._media_sock, self._cmd_sock):
+                try:
+                    if sock:
+                        sock.shutdown(socket.SHUT_RDWR)
+                except Exception:
+                    pass
+                try:
+                    if sock:
+                        sock.close()
+                except Exception:
+                    pass
+
+            self._cmd_sock = None
+            self._media_sock = None
+            self._session = None
+            self._dead = False
+            self._msgs = []
+            log.info("Disconnected")
 
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
 
+    def _send_cmd(self, data):
+        """Thread-safe send on the command socket."""
+        with self._send_lock:
+            if self._cmd_sock:
+                self._cmd_sock.sendall(data)
+
     def _login(self):
         """Perform LoginGetFlag → hash oracle → UserLogin."""
-        # Get nonce
+        # Get nonce — during login we're single-threaded so direct send is fine
         xml = make_xml(ID_LOGIN_GET_FLAG, f'<LoginGetFlag UserName="{self.username}" />')
         self._cmd_sock.sendall(pack_cmd_header(len(xml)) + xml)
 
@@ -219,20 +256,47 @@ class DVRClient:
         """Background thread: read messages from command socket."""
         while self._running:
             try:
-                hdr, body = recv_msg(self._cmd_sock, timeout=1)
-                if hdr and body:
+                hdr, body = recv_msg(self._cmd_sock, timeout=2)
+                if hdr is None:
+                    # Clean socket close (recv returned b'')
+                    log.warning("Command socket closed by DVR")
+                    self._dead = True
+                    return
+                if body:
+                    body_str = parse_body(body)
+                    now = time.time()
                     with self._lock:
-                        self._msgs.append((hdr, parse_body(body)))
-            except Exception:
-                pass
+                        self._msgs.append((now, hdr, body_str))
+                        # Prune old / excess messages to prevent unbounded growth
+                        if len(self._msgs) > _MSG_MAX_COUNT:
+                            self._msgs = self._msgs[-_MSG_MAX_COUNT // 2:]
+            except socket.timeout:
+                continue  # normal — no message within timeout
+            except OSError as e:
+                if not self._running:
+                    return  # disconnect was called
+                log.error("Command socket error: %s", e)
+                self._dead = True
+                return
+            except Exception as e:
+                if not self._running:
+                    return
+                log.error("Reader loop error: %s", e)
+                self._dead = True
+                return
 
     def _heartbeat_loop(self):
-        """Background thread: respond to HeartBeatNotice."""
+        """Background thread: respond to HeartBeatNotice + detect stalls."""
         while self._running:
+            if self._dead:
+                return
+
+            replied = False
             with self._lock:
-                for i, (hdr, body_str) in enumerate(self._msgs):
+                for i, (ts, hdr, body_str) in enumerate(self._msgs):
                     if 'HeartBeatNotice' in body_str and 'Reply' not in body_str:
                         self._msgs.pop(i)
+                        self._last_heartbeat = time.time()
                         try:
                             r = make_xml(
                                 ID_HEARTBEAT_REPLY,
@@ -244,20 +308,61 @@ class DVRClient:
                                 CMD_MAGIC, VERSION, hdr[2], 0,
                                 len(r), 3, 0, 0, 0,
                             )
-                            self._cmd_sock.sendall(h + r)
-                        except Exception:
-                            pass
+                            self._send_cmd(h + r)
+                            replied = True
+                        except Exception as e:
+                            log.error("Failed to send heartbeat reply: %s", e)
+                            self._dead = True
+                            return
                         break
+
+            # Detect heartbeat miss (DVR stopped talking to us)
+            if (self._last_heartbeat > 0 and not replied and
+                    time.time() - self._last_heartbeat > _HEARTBEAT_MISS_SEC):
+                log.error("No heartbeat from DVR for %ds — connection dead",
+                          _HEARTBEAT_MISS_SEC)
+                self._dead = True
+                return
+
             time.sleep(1)
 
     def _wait_for(self, tag, timeout=5):
         """Wait for a message containing `tag` in the reader queue."""
         deadline = time.time() + timeout
         while time.time() < deadline:
+            if self._dead:
+                return None, None
             with self._lock:
-                for i, (hdr, body_str) in enumerate(self._msgs):
+                for i, (ts, hdr, body_str) in enumerate(self._msgs):
                     if tag in body_str:
                         self._msgs.pop(i)
                         return hdr, body_str
             time.sleep(0.1)
         return None, None
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _configure_keepalive(sock):
+    """
+    Enable TCP keepalive with aggressive timers.
+
+    Default OS keepalive is often 2 hours — way too slow.  We set:
+      idle = 15s   (start probing after 15s of silence)
+      interval = 5s  (probe every 5s)
+      probes = 3     (give up after 3 missed probes → ~30s to detect dead)
+    """
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    try:
+        if sys.platform == 'linux':
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 15)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 5)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
+        elif sys.platform == 'darwin':
+            # macOS: TCP_KEEPALIVE sets the idle time (no interval/cnt tunables)
+            TCP_KEEPALIVE = 0x10
+            sock.setsockopt(socket.IPPROTO_TCP, TCP_KEEPALIVE, 15)
+    except (AttributeError, OSError) as e:
+        log.debug("Could not tune TCP keepalive: %s", e)
