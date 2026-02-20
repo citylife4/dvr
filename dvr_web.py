@@ -605,10 +605,68 @@ _mediamtx_stop = threading.Event()
 _log_mtx = logging.getLogger('dvr.mediamtx')
 
 
+def _detect_local_ips():
+    """Detect all non-loopback IPv4 addresses (LAN, Tailscale, VPN, etc.)."""
+    import socket as _sock
+    ips = set()
+    try:
+        # Method 1: getaddrinfo on hostname
+        for info in _sock.getaddrinfo(_sock.gethostname(), None, _sock.AF_INET):
+            addr = info[4][0]
+            if not addr.startswith('127.'):
+                ips.add(addr)
+    except Exception:
+        pass
+    try:
+        # Method 2: parse ip -4 addr (catches Tailscale, wireguard, etc.)
+        out = subprocess.check_output(['ip', '-4', '-o', 'addr', 'show'],
+                                      timeout=5, stderr=subprocess.DEVNULL).decode()
+        for line in out.splitlines():
+            parts = line.split()
+            # format: "2: eth0    inet 192.168.1.5/24 ..."
+            for i, p in enumerate(parts):
+                if p == 'inet' and i + 1 < len(parts):
+                    addr = parts[i + 1].split('/')[0]
+                    if not addr.startswith('127.'):
+                        ips.add(addr)
+    except Exception:
+        pass
+    return sorted(ips)
+
+
+def _generate_runtime_config(template_path, runtime_path):
+    """Read mediamtx.yml template, inject detected IPs, write runtime config."""
+    ips = _detect_local_ips()
+    _log_mtx.info('Detected local IPs for WebRTC ICE: %s', ', '.join(ips) or 'none')
+
+    with open(template_path, 'r') as f:
+        config = f.read()
+
+    # Replace the empty webrtcAdditionalHosts with detected IPs
+    if ips:
+        hosts_yaml = 'webrtcAdditionalHosts:\n' + ''.join(f'  - {ip}\n' for ip in ips)
+    else:
+        hosts_yaml = 'webrtcAdditionalHosts: []\n'
+
+    # Replace the line "webrtcAdditionalHosts: []" or multi-line block
+    import re
+    config = re.sub(
+        r'webrtcAdditionalHosts:.*?(?=\n\S|\Z)',
+        hosts_yaml.rstrip(),
+        config,
+        flags=re.DOTALL,
+    )
+
+    with open(runtime_path, 'w') as f:
+        f.write(config)
+    return runtime_path
+
+
 def _launch_mediamtx():
     """Launch mediamtx process. Returns the Popen object or None."""
     mediamtx_bin = os.path.join(BASE_DIR, 'mediamtx')
     mediamtx_yml = os.path.join(BASE_DIR, 'mediamtx.yml')
+    mediamtx_runtime = os.path.join(BASE_DIR, 'mediamtx_runtime.yml')
 
     if not os.path.isfile(mediamtx_bin):
         _log_mtx.warning('mediamtx not found at %s, skipping RTSP server', mediamtx_bin)
@@ -617,9 +675,16 @@ def _launch_mediamtx():
         _log_mtx.warning('mediamtx.yml not found, skipping RTSP server')
         return None
 
+    # Generate runtime config with detected local IPs for WebRTC
+    try:
+        cfg = _generate_runtime_config(mediamtx_yml, mediamtx_runtime)
+    except Exception as e:
+        _log_mtx.warning('Failed to generate runtime config: %s — using template', e)
+        cfg = mediamtx_yml
+
     _log_mtx.info('Starting mediamtx...')
     return subprocess.Popen(
-        [mediamtx_bin, mediamtx_yml],
+        [mediamtx_bin, cfg],
         cwd=BASE_DIR,
         stdout=sys.stdout,
         stderr=sys.stderr,

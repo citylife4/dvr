@@ -10,6 +10,9 @@ venv/
 cache/
 recordings/
 
+# Auto-generated mediamtx runtime config (has dynamic IPs)
+mediamtx_runtime.yml
+
 # Windows tooling (not needed — pure Python auth)
 dvr_tools_windows
 *.exe

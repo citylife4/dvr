@@ -97,6 +97,27 @@
   
   .hero-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
 
+  /* ── Disk Usage Bar ──────────────────────── */
+  .disk-bar-wrap {
+    flex: 1;
+    min-width: 180px;
+    max-width: 320px;
+  }
+  .disk-label {
+    font-size: 11px; color: #888; margin-bottom: 4px;
+    display: flex; justify-content: space-between;
+  }
+  .disk-bar {
+    height: 8px; background: #222; border-radius: 4px; overflow: hidden;
+    border: 1px solid #333;
+  }
+  .disk-bar-fill {
+    height: 100%; border-radius: 4px; transition: width 0.5s, background 0.3s;
+    background: #2ecc40;
+  }
+  .disk-bar-fill.warn { background: #f39c12; }
+  .disk-bar-fill.crit { background: #e74c3c; }
+
   /* ── Main Layout ─────────────────────────── */
   .main-grid {
     display: grid;
@@ -257,6 +278,13 @@
       <div class="status-sub" id="main-sub">Connecting to service...</div>
     </div>
   </div>
+  <div class="disk-bar-wrap" id="disk-wrap" style="display:none">
+    <div class="disk-label">
+      <span id="disk-label-left">Disk</span>
+      <span id="disk-label-right">—</span>
+    </div>
+    <div class="disk-bar"><div class="disk-bar-fill" id="disk-fill" style="width:0%"></div></div>
+  </div>
   <button class="hero-btn start" id="main-btn" onclick="toggleService()" disabled>
     Please Wait...
   </button>
@@ -293,6 +321,18 @@
       <div class="cfg-field">
         <label>Retention (Hours)</label>
         <input type="number" id="cfg-retention" min="0" placeholder="e.g. 24 (0 = forever)">
+      </div>
+
+      <!-- Recording Directory -->
+      <div class="cfg-field">
+        <label>Recording Directory</label>
+        <input type="text" id="cfg-record-dir" placeholder="/mnt/usb/recordings">
+      </div>
+
+      <!-- Min Disk Space -->
+      <div class="cfg-field">
+        <label>Min Free Disk (MB)</label>
+        <input type="number" id="cfg-min-disk" min="50" step="50" placeholder="e.g. 500">
       </div>
 
       <!-- Cloud Backup -->
@@ -467,10 +507,11 @@ async function saveConfig(silent = false, forceEnabled = null) {
     channels: channels,
     stream_type: parseInt(document.getElementById('cfg-stream-type').value),
     retention_hours: parseInt(document.getElementById('cfg-retention').value) || 0,
+    record_dir: document.getElementById('cfg-record-dir').value.trim() || _config.record_dir || '',
+    min_disk_mb: parseInt(document.getElementById('cfg-min-disk').value) || 500,
     // Preserve hidden fields if possible, or defaults
     segment_minutes: _config.segment_minutes || 15, 
     schedule: _config.schedule || "0-23",
-    record_dir: _config.record_dir || "/opt/dvr/recordings"
   };
 
   try {
@@ -524,6 +565,9 @@ function renderStatus() {
   const txt = document.getElementById('main-status');
   const sub = document.getElementById('main-sub');
 
+  // Render disk usage bar
+  renderDisk(_status.disk);
+
   // Interpret 'running' as the service is active
   if (_status.running) {
     hero.classList.add('active');
@@ -531,8 +575,15 @@ function renderStatus() {
     const count = Object.values(_status.channels || {}).filter(c => c.state === 'recording').length;
     const total = Object.keys(_status.channels || {}).length;
     
+    // Check for disk-paused channels
+    const paused = Object.values(_status.channels || {}).filter(c => (c.state || '').includes('disk')).length;
+    
     txt.textContent = "Status: Active (Recording)";
-    sub.textContent = `${count} of ${total} configured channels recording`;
+    if (paused > 0) {
+      sub.textContent = `${count} recording, ${paused} paused (disk low)`;
+    } else {
+      sub.textContent = `${count} of ${total} configured channels recording`;
+    }
     
     btn.className = "hero-btn stop";
     btn.innerHTML = "■ Stop Recording Service";
@@ -545,6 +596,25 @@ function renderStatus() {
     btn.className = "hero-btn start";
     btn.innerHTML = "▶ Start Recording Service";
     btn.disabled = false;
+  }
+}
+
+function renderDisk(disk) {
+  const wrap = document.getElementById('disk-wrap');
+  if (!disk || !disk.total_mb) { wrap.style.display = 'none'; return; }
+  wrap.style.display = '';
+  const pct = disk.used_pct || 0;
+  const fill = document.getElementById('disk-fill');
+  fill.style.width = pct + '%';
+  fill.className = 'disk-bar-fill' + (pct >= 90 ? ' crit' : pct >= 75 ? ' warn' : '');
+  const freeTxt = disk.free_mb >= 1024 ? (disk.free_mb / 1024).toFixed(1) + ' GB' : disk.free_mb + ' MB';
+  const totalTxt = disk.total_mb >= 1024 ? (disk.total_mb / 1024).toFixed(1) + ' GB' : disk.total_mb + ' MB';
+  document.getElementById('disk-label-left').textContent = disk.path || 'Disk';
+  document.getElementById('disk-label-right').textContent = freeTxt + ' free / ' + totalTxt;
+  if (!disk.ok) {
+    document.getElementById('disk-label-right').style.color = '#e74c3c';
+  } else {
+    document.getElementById('disk-label-right').style.color = '';
   }
 }
 
@@ -581,6 +651,9 @@ async function loadConfig() {
     
     const retVal = c.retention_hours !== undefined ? c.retention_hours : 24;
     document.getElementById('cfg-retention').value = retVal;
+    
+    document.getElementById('cfg-record-dir').value = c.record_dir || '';
+    document.getElementById('cfg-min-disk').value = c.min_disk_mb !== undefined ? c.min_disk_mb : 500;
     
     // Checkboxes
     const chs = c.channels || [];

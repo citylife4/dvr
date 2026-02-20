@@ -12,7 +12,8 @@ Configuration (environment variables):
   DVR_RECORD_DIR           local recordings dir  (default: ./recordings)
   DVR_RECORD_RETENTION_HR  hours to keep local   (default: 24, 0=forever)
   DVR_RECORD_SCHEDULE      hour ranges           (default: 0-23 = always)
-  DVR_RECORD_STREAM_TYPE   0=main 1=sub          (default: 0)
+  DVR_RECORD_STREAM_TYPE   1=main 2=sub          (default: 1)
+  DVR_RECORD_MIN_DISK_MB   min free MB to record (default: 500)
 
   DVR_GDRIVE_ENABLED       true/false            (default: false)
   DVR_GDRIVE_CREDENTIALS   path to JSON key      (required if gdrive on)
@@ -35,6 +36,9 @@ from datetime import datetime
 
 log = logging.getLogger('dvr.recorder')
 
+# Default minimum free disk space in MB before recording pauses
+_DEFAULT_MIN_DISK_MB = 500
+
 
 class RecordingScheduler:
     """Manages per-channel recording processes + upload queue."""
@@ -46,6 +50,8 @@ class RecordingScheduler:
         self.segment_minutes = int(os.environ.get('DVR_RECORD_SEGMENT_MIN', '15'))
         self.stream_type = int(os.environ.get('DVR_RECORD_STREAM_TYPE', '1'))
         self.retention_hours = int(os.environ.get('DVR_RECORD_RETENTION_HR', '24'))
+        self.min_disk_mb = int(os.environ.get('DVR_RECORD_MIN_DISK_MB',
+                                              str(_DEFAULT_MIN_DISK_MB)))
         _sched_str = os.environ.get('DVR_RECORD_SCHEDULE', '0-23')
         self.schedule_hours = _parse_schedule(_sched_str)
         self._schedule_str = _sched_str   # kept for serialization
@@ -168,6 +174,7 @@ class RecordingScheduler:
 
     def get_status(self):
         """Return recording status summary (JSON-safe)."""
+        disk = self._get_disk_info()
         return {
             'enabled': self.enabled,
             'running': self._running,
@@ -181,6 +188,8 @@ class RecordingScheduler:
             'stream_type': self.stream_type,
             'retention_hours': self.retention_hours,
             'record_dir': self.record_dir,
+            'min_disk_mb': self.min_disk_mb,
+            'disk': disk,
         }
 
     def get_config(self) -> dict:
@@ -193,6 +202,7 @@ class RecordingScheduler:
             'retention_hours':   self.retention_hours,
             'schedule':          self._schedule_str,
             'record_dir':        self.record_dir,
+            'min_disk_mb':       self.min_disk_mb,
             'gdrive_enabled':    self.gdrive_enabled,
             'gdrive_credentials': self.gdrive_credentials,
             'gdrive_folder_id':  self.gdrive_folder_id,
@@ -215,7 +225,27 @@ class RecordingScheduler:
         if 'segment_minutes'    in cfg: self.segment_minutes   = int(cfg['segment_minutes'])
         if 'stream_type'        in cfg: self.stream_type       = int(cfg['stream_type'])
         if 'retention_hours'    in cfg: self.retention_hours   = int(cfg['retention_hours'])
-        if 'record_dir'         in cfg: self.record_dir        = str(cfg['record_dir'])
+        if 'record_dir'         in cfg:
+            new_dir = str(cfg['record_dir'])
+            # Validate: path must be an absolute path and parent must exist
+            if not os.path.isabs(new_dir):
+                log.warning('record_dir must be absolute path, got: %s', new_dir)
+            else:
+                parent = os.path.dirname(new_dir.rstrip('/'))
+                if not os.path.isdir(parent):
+                    log.warning('record_dir parent does not exist: %s', parent)
+                else:
+                    try:
+                        os.makedirs(new_dir, exist_ok=True)
+                        # Quick write test
+                        test_file = os.path.join(new_dir, '.write_test')
+                        with open(test_file, 'w') as _tf:
+                            _tf.write('ok')
+                        os.remove(test_file)
+                        self.record_dir = new_dir
+                    except OSError as e:
+                        log.warning('record_dir not writable: %s (%s)', new_dir, e)
+        if 'min_disk_mb'        in cfg: self.min_disk_mb       = int(cfg['min_disk_mb'])
         if 'gdrive_enabled'     in cfg: self.gdrive_enabled    = bool(cfg['gdrive_enabled'])
         if 'gdrive_credentials' in cfg: self.gdrive_credentials = str(cfg['gdrive_credentials'])
         if 'gdrive_folder_id'   in cfg: self.gdrive_folder_id  = str(cfg['gdrive_folder_id'])
@@ -379,6 +409,26 @@ class RecordingScheduler:
                 time.sleep(30)
                 continue
 
+            # Check disk space before starting
+            if not self._check_disk_space():
+                self._status[channel]['state'] = 'paused (disk low)'
+                log.warning('ch%d: disk low (%d MB min), pausing recording',
+                            channel, self.min_disk_mb)
+                self._emergency_cleanup()
+                if not self._check_disk_space():
+                    # Still not enough after cleanup — wait and retry
+                    time.sleep(60)
+                    continue
+
+            # Ensure recording dir exists (USB may have been re-mounted)
+            try:
+                os.makedirs(ch_dir, exist_ok=True)
+            except OSError as e:
+                self._status[channel]['state'] = f'error (dir: {e})'
+                log.error('ch%d: cannot create dir %s: %s', channel, ch_dir, e)
+                time.sleep(30)
+                continue
+
             seg_sec = self.segment_minutes * 60
             pattern = os.path.join(ch_dir, '%Y-%m-%d_%H-%M-%S.mp4')
 
@@ -425,9 +475,18 @@ class RecordingScheduler:
                 while self._running and self._is_scheduled_now():
                     if ffmpeg.poll() is not None:
                         break
+                    # Check disk space during recording
+                    if not self._check_disk_space():
+                        log.warning('ch%d: disk low during recording, stopping',
+                                    channel)
+                        self._status[channel]['state'] = 'paused (disk low)'
+                        break
                     # Count completed segments
-                    self._status[channel]['segments'] = sum(
-                        1 for f in os.listdir(ch_dir) if f.endswith('.mp4'))
+                    try:
+                        self._status[channel]['segments'] = sum(
+                            1 for f in os.listdir(ch_dir) if f.endswith('.mp4'))
+                    except OSError:
+                        pass
                     time.sleep(10)
 
                 # Graceful stop: terminate feeder → pipe closes → ffmpeg finalizes
@@ -539,10 +598,17 @@ class RecordingScheduler:
     # ── Retention cleanup ───────────────────────────────
 
     def _cleanup_loop(self):
-        """Periodically delete old local recordings."""
+        """Periodically delete old local recordings and monitor disk space."""
         while self._running:
             time.sleep(300)
             try:
+                # Emergency cleanup if disk is critically low
+                if not self._check_disk_space():
+                    self._emergency_cleanup()
+
+                # Normal retention cleanup
+                if self.retention_hours <= 0:
+                    continue
                 cutoff = time.time() - (self.retention_hours * 3600)
                 for ch_dir_name in os.listdir(self.record_dir):
                     ch_dir = os.path.join(self.record_dir, ch_dir_name)
@@ -584,6 +650,84 @@ class RecordingScheduler:
 
     def _is_scheduled_now(self):
         return datetime.now().hour in self.schedule_hours
+
+    def _get_disk_info(self) -> dict:
+        """Return disk usage info for the recording directory."""
+        try:
+            st = os.statvfs(self.record_dir)
+            total = st.f_frsize * st.f_blocks
+            free = st.f_frsize * st.f_bavail
+            used = total - free
+            return {
+                'total_mb': round(total / (1024 * 1024)),
+                'free_mb': round(free / (1024 * 1024)),
+                'used_mb': round(used / (1024 * 1024)),
+                'used_pct': round(used / total * 100, 1) if total > 0 else 0,
+                'path': self.record_dir,
+                'ok': free >= self.min_disk_mb * 1024 * 1024,
+            }
+        except OSError as e:
+            return {
+                'total_mb': 0, 'free_mb': 0, 'used_mb': 0,
+                'used_pct': 0, 'path': self.record_dir,
+                'ok': False, 'error': str(e),
+            }
+
+    def _check_disk_space(self) -> bool:
+        """Return True if enough disk space is available to record."""
+        try:
+            st = os.statvfs(self.record_dir)
+            free_mb = (st.f_frsize * st.f_bavail) / (1024 * 1024)
+            return free_mb >= self.min_disk_mb
+        except OSError:
+            return False
+
+    def _emergency_cleanup(self):
+        """Delete oldest recordings (already-uploaded first) to free space.
+        Called when disk is critically low — ignores retention settings."""
+        log.warning('Emergency cleanup: disk low on %s (min %d MB)',
+                    self.record_dir, self.min_disk_mb)
+        # Collect all recordings with mtime, prioritizing uploaded files
+        all_files = []
+        try:
+            for ch_dir_name in os.listdir(self.record_dir):
+                ch_dir = os.path.join(self.record_dir, ch_dir_name)
+                if not os.path.isdir(ch_dir) or ch_dir_name.startswith('.'):
+                    continue
+                active = self._active_file(ch_dir)
+                for f in os.listdir(ch_dir):
+                    if not f.endswith('.mp4'):
+                        continue
+                    fp = os.path.join(ch_dir, f)
+                    if fp == active:
+                        continue  # never delete the file currently being written
+                    try:
+                        mt = os.path.getmtime(fp)
+                        uploaded = fp in self._uploaded
+                        # Sort key: uploaded files first (0), then by oldest
+                        all_files.append((0 if uploaded else 1, mt, fp))
+                    except FileNotFoundError:
+                        pass
+        except OSError:
+            return 0
+
+        all_files.sort()  # uploaded+oldest first
+        deleted = 0
+        for _, _, fp in all_files:
+            try:
+                os.remove(fp)
+                self._uploaded.discard(fp)
+                deleted += 1
+                log.info('Emergency cleanup: removed %s', fp)
+                # Check if we have enough space now
+                if self._check_disk_space():
+                    break
+            except OSError:
+                pass
+        if deleted:
+            self._save_upload_state()
+            log.info('Emergency cleanup: removed %d files', deleted)
+        return deleted
 
 
 # ── Module-level helpers ────────────────────────────────

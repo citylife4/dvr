@@ -20,18 +20,30 @@ log = logging.getLogger(__name__)
 SUB_HEADER_SIZE = 44
 
 
+# Standard H.264 NAL types safe to pass through (Annex B):
+#  1-5  = VCL (coded slices, IDR, partitions)
+#  6    = SEI
+#  7    = SPS
+#  8    = PPS
+#  9    = Access Unit Delimiter
+#  10   = End of Sequence
+#  11   = End of Stream
+#  12   = Filler data
+#  13   = SPS extension
+# Types 24-31 are RTP aggregation packet types (STAP-A/B, MTAP, FU-A/B)
+# and MUST NOT appear in Annex B streams — if they do, ffmpeg's RTP
+# packetizer misinterprets them causing mediamtx processing errors.
+_VALID_NAL_TYPES = frozenset(range(1, 14))  # 1-13 inclusive
+
+
 def extract_h264(payload):
     """
     Extract clean H.264 NAL units from a media payload.
     Skips the vendor-specific prefix (000001c6/c7 NALs) and filters out
     any non-standard NAL types to avoid crashes in downstream consumers.
-    Returns bytes of H.264 data starting from the first standard NAL.
+    Only passes through NAL types 1-13 (standard Annex B types).
+    Returns bytes of clean H.264 data.
     """
-    # Valid H264 NAL types (1-12 are standard, 24-31 are RTP extensions)
-    # We accept types 1-12 (VCL + parameter sets) and skip vendor types
-    VENDOR_NAL_TYPES = {0xC6, 0xC7}
-
-    # Find ALL 4-byte NAL start codes and filter to valid H.264 only
     out_parts = []
     sc4 = b'\x00\x00\x00\x01'
     pos = 0
@@ -46,12 +58,10 @@ def extract_h264(payload):
         else:
             nal_data = payload[idx:next_idx]
 
-        # Check the NAL type byte (first byte after start code, lower 5 bits)
+        # NAL type is lower 5 bits of first byte after start code
         if len(nal_data) > 4:
             nal_type = nal_data[4] & 0x1F
-            full_byte = nal_data[4]
-            # Skip vendor NAL types and empty/forbidden NALs
-            if full_byte not in VENDOR_NAL_TYPES and nal_type != 0 and len(nal_data) > 5:
+            if nal_type in _VALID_NAL_TYPES:
                 out_parts.append(nal_data)
 
         pos = (next_idx if next_idx >= 0 else len(payload))
@@ -59,11 +69,12 @@ def extract_h264(payload):
     if out_parts:
         return b''.join(out_parts)
 
-    # Fallback: find 3-byte start codes, skip vendor NALs
+    # Fallback: find 3-byte start codes, filter same way
     pos = 0
-    while pos < len(payload) - 3:
+    while pos < len(payload) - 4:
         if payload[pos:pos + 3] == b'\x00\x00\x01':
-            if pos + 3 < len(payload) and payload[pos + 3] not in VENDOR_NAL_TYPES:
+            nal_type = payload[pos + 3] & 0x1F
+            if nal_type in _VALID_NAL_TYPES:
                 return b'\x00' + payload[pos:]  # Promote to 4-byte start code
             pos += 4
         else:

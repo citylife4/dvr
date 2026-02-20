@@ -23,7 +23,7 @@ SyslogIdentifier=dvr
 # Security hardening
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=/opt/dvr
+ReadWritePaths=/opt/dvr /mnt
 
 [Install]
 WantedBy=multi-user.target

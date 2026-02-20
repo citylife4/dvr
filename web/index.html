@@ -256,11 +256,13 @@
   const HOST = location.hostname || 'localhost';
   const HLS_PORT = 8888;
   const WHEP_PORT = 8889;
+  const HLS_PORT_NUM = HLS_PORT;
   const CHANNELS = [0, 1, 2, 3];
   const RETRY_BASE = 3000;   // initial retry delay ms
   const RETRY_MAX  = 30000;  // max retry delay ms
   const WHEP_TIMEOUT = 10000; // fetch timeout ms
   const STALL_CHECK  = 8000; // watchdog interval ms
+  const WEBRTC_MAX_FAILS = 3; // switch to HLS after this many WebRTC failures
 
   // ── Channel state ──────────────────────────────────
   const channels = {};
@@ -296,7 +298,9 @@
     setStatus(ch, 'connecting', 'connecting');
 
     try {
-      const pc = new RTCPeerConnection({ iceServers: [] });
+      const pc = new RTCPeerConnection({
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+      });
       c.pc = pc;
 
       pc.addTransceiver('video', { direction: 'recvonly' });
@@ -353,8 +357,61 @@
     } catch (err) {
       const msg = err.name === 'AbortError' ? 'timeout' : err.message;
       console.warn(`CH${ch} WHEP failed:`, msg);
+      const nextRetryCount = c.retryCount + 1;
+      if (nextRetryCount >= WEBRTC_MAX_FAILS) {
+        console.warn(`CH${ch} WebRTC failed ${nextRetryCount} times, falling back to HLS`);
+        connectHLS(ch);
+        return;
+      }
       setStatus(ch, 'error', 'retry…');
       scheduleRetry(ch);
+    }
+  }
+
+  // ── HLS fallback ────────────────────────────────────
+  function connectHLS(ch) {
+    const c = channels[ch];
+    cleanup(ch);
+    setStatus(ch, 'connecting', 'HLS…');
+    const v = c.video;
+    const hlsUrl = `http://${HOST}:${HLS_PORT_NUM}/ch${ch}/index.m3u8`;
+    // Use native HLS (Safari) or hls.js if loaded
+    if (v.canPlayType('application/vnd.apple.mpegurl')) {
+      v.src = hlsUrl;
+      v.play().catch(() => {});
+      v.onloadeddata = () => setStatus(ch, 'live', 'HLS');
+      v.onerror = () => {
+        setStatus(ch, 'error', 'HLS error');
+        setTimeout(() => connectHLS(ch), 5000);
+      };
+    } else if (typeof Hls !== 'undefined') {
+      const hls = new Hls({ enableWorker: true, lowLatencyMode: true });
+      c._hls = hls;
+      hls.loadSource(hlsUrl);
+      hls.attachMedia(v);
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        v.play().catch(() => {});
+        setStatus(ch, 'live', 'HLS');
+      });
+      hls.on(Hls.Events.ERROR, (_, data) => {
+        if (data.fatal) {
+          setStatus(ch, 'error', 'HLS error');
+          hls.destroy();
+          setTimeout(() => connectHLS(ch), 5000);
+        }
+      });
+    } else {
+      // Dynamically load hls.js then retry
+      const s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/hls.js@latest';
+      s.onload = () => connectHLS(ch);
+      s.onerror = () => {
+        // Last resort: try native HLS src directly
+        v.src = hlsUrl;
+        v.play().catch(() => {});
+        setStatus(ch, 'live', 'HLS');
+      };
+      document.head.appendChild(s);
     }
   }
 
@@ -363,15 +420,16 @@
     if (c.pc) { c.pc.close(); c.pc = null; }
     if (c.retryTimer) { clearTimeout(c.retryTimer); c.retryTimer = null; }
     if (c.stallTimer) { clearInterval(c.stallTimer); c.stallTimer = null; }
+    if (c._hls) { c._hls.destroy(); c._hls = null; }
     c.video.srcObject = null;
+    c.video.removeAttribute('src');
   }
 
   function scheduleRetry(ch) {
     const c = channels[ch];
     if (c.retryTimer) return;
     // Exponential backoff: 3s, 6s, 12s, 24s, capped at 30s
-    const delay = Math.min(RETRY_BASE * Math.pow(2, c.retryCount), RETRY_MAX);
-    c.retryCount++;
+    const delay = Math.min(RETRY_BASE * Math.pow(2, Math.max(0, c.retryCount - 1)), RETRY_MAX);
     console.log(`CH${ch} retry #${c.retryCount} in ${delay}ms`);
     c.retryTimer = setTimeout(() => {
       c.retryTimer = null;

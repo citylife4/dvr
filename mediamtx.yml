@@ -22,6 +22,11 @@ hlsAddress: :8888
 # WebRTC (optional)
 webrtc: yes
 webrtcAddress: :8889
+webrtcICEServers2:
+  - url: stun:stun.l.google.com:19302
+# webrtcAdditionalHosts is populated dynamically at launch by dvr_web.py
+# to include all local + VPN/Tailscale IPs detected at startup time.
+webrtcAdditionalHosts: []
 
 # API
 api: yes
