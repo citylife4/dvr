@@ -528,7 +528,9 @@ class DVRHandler(http.server.SimpleHTTPRequestHandler):
                 self._json_response({'error': str(e)}, 500)
         elif path == '/api/recordings/delete-all':
             try:
-                count = _recorder.delete_all_recordings()
+                body = self._read_body()
+                date_filter = body.get('date') if isinstance(body, dict) else None
+                count = _recorder.delete_all_recordings(date_filter=date_filter)
                 self._json_response({'ok': True, 'deleted': count})
             except Exception as e:
                 self._json_response({'error': str(e)}, 500)

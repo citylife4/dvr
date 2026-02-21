@@ -281,6 +281,18 @@ class RecordingScheduler:
             return None
         if not files:
             return None
+        
+        # Only consider it active if the channel is actually recording
+        ch_name = os.path.basename(ch_dir)
+        if ch_name.startswith('ch'):
+            try:
+                ch_num = int(ch_name[2:])
+                with self._lock:
+                    if ch_num not in self._processes:
+                        return None
+            except ValueError:
+                pass
+
         newest = max(files, key=lambda p: os.path.getmtime(p))
         return newest
 
@@ -384,10 +396,10 @@ class RecordingScheduler:
         log.info('Deleted recording %s/%s', channel, filename)
         return True
 
-    def delete_all_recordings(self):
-        """Delete all local recording files.  Returns count deleted."""
+    def delete_all_recordings(self, date_filter=None):
+        """Delete all local recording files, optionally filtered by date. Returns count deleted."""
         count = 0
-        recs = self.get_recordings(limit=99999)
+        recs = self.get_recordings(limit=99999, date_filter=date_filter)
         for r in recs:
             try:
                 self.delete_recording(r['channel'], r['filename'])

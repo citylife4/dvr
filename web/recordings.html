@@ -247,9 +247,21 @@
   
   .hour-header {
     font-size: 11px; font-weight: 700; color: #555; margin: 12px 0 6px 4px; text-transform: uppercase; letter-spacing: 0.5px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .hour-header::after {
+    content: ''; flex: 1; height: 1px; background: #222;
   }
   
   .empty-state { text-align: center; padding: 40px; color: #444; font-style: italic; font-size: 14px; }
+
+  .delete-day-btn {
+    background: none; border: 1px solid #e74c3c; color: #e74c3c;
+    padding: 6px 12px; border-radius: 4px; font-size: 12px; font-weight: 600;
+    cursor: pointer; transition: all 0.2s; margin-left: 10px;
+  }
+  .delete-day-btn:hover { background: #e74c3c; color: #fff; }
+  .delete-day-btn:disabled { opacity: 0.3; cursor: not-allowed; }
 
   /* Scrollbar */
   ::-webkit-scrollbar { width: 8px; }
@@ -402,6 +414,7 @@
            <option value="">Loading Dates...</option>
         </select>
         <button class="nav-arr" id="d-next" onclick="navDate(-1)">›</button>
+        <button class="delete-day-btn" id="btn-del-day" onclick="deleteDay()" disabled title="Delete all recordings for this day">Delete Day</button>
       </div>
 
       <div class="rec-list" id="rec-list">
@@ -812,6 +825,7 @@ function updateNav() {
   // length-1 is oldest
   document.getElementById('d-next').disabled = (idx <= 0);
   document.getElementById('d-prev').disabled = (idx >= _dates.length - 1);
+  document.getElementById('btn-del-day').disabled = !_currentDate;
 }
 
 async function loadRecordings(reset = false) {
@@ -872,7 +886,7 @@ function renderList() {
     
     const timeStr = d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
     const sizeMB = (r.size / 1048576).toFixed(1);
-    const badge = `<span class="rec-ch-badge">CH${r.channel}</span>`;
+    const badge = `<span class="rec-ch-badge">CH${r.channel.replace('ch','')}</span>`;
     const cloudIcon = r.uploaded ? '<span title="Uploaded to Drive" style="color:#2ecc40;cursor:help">☁</span>' : '';
     
     div.innerHTML = `
@@ -891,6 +905,46 @@ function renderList() {
     `;
     list.appendChild(div);
   });
+}
+
+async function deleteDay() {
+  if (!_currentDate) return;
+  if (!confirm(`Are you sure you want to delete ALL recordings for ${_currentDate}?`)) return;
+  
+  const btn = document.getElementById('btn-del-day');
+  const oldText = btn.textContent;
+  btn.textContent = "Deleting...";
+  btn.disabled = true;
+  
+  try {
+    const res = await fetch(API + '/recordings/delete-all', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ date: _currentDate })
+    });
+    
+    if (res.ok) {
+      const data = await res.json();
+      alert(`Deleted ${data.deleted} recordings.`);
+      // Reload dates and recordings
+      await loadDates();
+      if (_dates.length > 0) {
+        changeDate(_dates[0]);
+      } else {
+        _currentDate = null;
+        document.getElementById('rec-list').innerHTML = '<div class="empty-state">No recording dates found.</div>';
+        document.getElementById('date-select').innerHTML = '<option>No Dates</option>';
+        updateNav();
+      }
+    } else {
+      alert("Delete failed.");
+    }
+  } catch(e) {
+    alert("Error deleting: " + e);
+  } finally {
+    btn.textContent = oldText;
+    btn.disabled = !_currentDate;
+  }
 }
 
 async function deleteRec(ch, fname) {
